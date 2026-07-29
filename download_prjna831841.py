@@ -3,7 +3,8 @@
 
 The script deliberately selects the lossless "SRA Normalized" object for each
 run, not SRA Lite. It can stop after verified SRA download, or convert each run
-to split paired FASTQ and compress it before moving to the next run.
+to split paired FASTQ and compress it before moving to the next run. Individual
+network failures do not abort the batch; failed runs are retried in later passes.
 
 Requires:
   - Python 3.9+
@@ -217,6 +218,7 @@ def download_one(record: RunRecord, sra_dir: Path, curl_path: str) -> Path:
         "-",
         "--retry",
         "20",
+        "--retry-all-errors",
         "--retry-delay",
         "15",
         "--connect-timeout",
@@ -399,6 +401,15 @@ def parse_args() -> argparse.Namespace:
         help="Threads for fasterq-dump/pigz (default: up to 8)",
     )
     parser.add_argument(
+        "--batch-attempts",
+        type=int,
+        default=3,
+        help=(
+            "Number of complete passes over runs that still failed after curl's "
+            "own retries (default: 3)"
+        ),
+    )
+    parser.add_argument(
         "--delete-sra-after-fastq",
         action="store_true",
         help="Delete each SRA only after successful compressed FASTQ creation",
@@ -419,8 +430,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.jobs < 1 or args.threads < 1:
-        raise ValueError("--jobs and --threads must be positive integers")
+    if args.jobs < 1 or args.threads < 1 or args.batch_attempts < 1:
+        raise ValueError(
+            "--jobs, --threads, and --batch-attempts must be positive integers"
+        )
     if not args.xml.is_file():
         raise FileNotFoundError(args.xml)
 
@@ -500,22 +513,66 @@ def main() -> int:
 
     logging.info("Starting downloads with %d concurrent job(s)", args.jobs)
     downloaded: dict[str, Path] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
-        future_to_record = {
-            executor.submit(download_one, record, sra_dir, curl_path): record
-            for record in records_to_download
-        }
-        for future in concurrent.futures.as_completed(future_to_record):
-            record = future_to_record[future]
-            try:
-                downloaded[record.accession] = future.result()
-            except Exception:
-                logging.exception("%s: download failed", record.accession)
-                for pending in future_to_record:
-                    pending.cancel()
-                return 1
+    remaining = list(records_to_download)
 
-    logging.info("All %d required SRA files downloaded and MD5 verified", len(downloaded))
+    for batch_attempt in range(1, args.batch_attempts + 1):
+        if not remaining:
+            break
+
+        logging.info(
+            "Download pass %d/%d: %d run(s) to process",
+            batch_attempt,
+            args.batch_attempts,
+            len(remaining),
+        )
+        failed_this_pass: list[RunRecord] = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+            future_to_record = {
+                executor.submit(download_one, record, sra_dir, curl_path): record
+                for record in remaining
+            }
+            for future in concurrent.futures.as_completed(future_to_record):
+                record = future_to_record[future]
+                try:
+                    downloaded[record.accession] = future.result()
+                except Exception:
+                    logging.exception(
+                        "%s: download failed on pass %d; continuing with other runs",
+                        record.accession,
+                        batch_attempt,
+                    )
+                    failed_this_pass.append(record)
+
+        remaining = sorted(failed_this_pass, key=lambda r: r.accession)
+        if remaining and batch_attempt < args.batch_attempts:
+            delay = min(300, 30 * batch_attempt)
+            logging.warning(
+                "%d run(s) failed on pass %d; retrying them after %d seconds",
+                len(remaining),
+                batch_attempt,
+                delay,
+            )
+            time.sleep(delay)
+
+    if remaining:
+        failed_path = logs_dir / "failed_accessions.txt"
+        failed_path.write_text(
+            "\n".join(record.accession for record in remaining) + "\n",
+            encoding="utf-8",
+        )
+        logging.error(
+            "%d run(s) still failed after %d pass(es). See %s",
+            len(remaining),
+            args.batch_attempts,
+            failed_path,
+        )
+        return 1
+
+    logging.info(
+        "All %d required SRA files downloaded and MD5 verified",
+        len(records_to_download),
+    )
 
     if args.mode == "sra":
         return 0
