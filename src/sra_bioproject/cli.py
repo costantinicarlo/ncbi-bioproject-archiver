@@ -11,6 +11,7 @@ import sys
 
 from .downloader import check_command, download_batch, human_bytes
 from .fastq import convert_one, fastq_complete, validate_vdb
+from .manifest import read_manifest, write_manifest
 from .validation import validate_destination, verify_download
 from .xml_parser import parse_xml
 
@@ -48,9 +49,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    download_parser = subparsers.add_parser("download", help="download runs from an SRA XML export")
-    download_parser.add_argument("input", type=Path, help="NCBI SRA XML export")
+    manifest_parser = subparsers.add_parser("manifest", help="convert an SRA XML export to TSV")
+    manifest_parser.add_argument("xml", type=Path, help="NCBI SRA XML export")
+    manifest_parser.add_argument("--output", type=str, required=True, help="TSV path or - for stdout")
+    manifest_parser.set_defaults(handler=run_manifest)
+
+    download_parser = subparsers.add_parser("download", help="download runs from XML or TSV")
+    download_parser.add_argument("input", type=Path, help="NCBI SRA XML export or TSV manifest")
     download_parser.add_argument("--outdir", type=Path, required=True, help="project output directory")
+    download_parser.add_argument(
+        "--input-format",
+        choices=("auto", "xml", "tsv"),
+        default="auto",
+        help="input format (default: infer from .xml or .tsv extension)",
+    )
     download_parser.add_argument("--mode", choices=("sra", "fastq"), default="sra")
     download_parser.add_argument("--jobs", type=positive_integer, default=2)
     download_parser.add_argument(
@@ -67,6 +79,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_manifest(args: argparse.Namespace) -> int:
+    if not args.xml.is_file():
+        raise FileNotFoundError(args.xml)
+    write_manifest(parse_xml(args.xml), args.output)
+    return 0
+
+
+def load_records(path: Path, input_format: str) -> tuple[list, str]:
+    selected_format = input_format
+    if selected_format == "auto":
+        suffix = path.suffix.lower()
+        if suffix == ".xml":
+            selected_format = "xml"
+        elif suffix == ".tsv":
+            selected_format = "tsv"
+        else:
+            raise ValueError(
+                f"Cannot infer input format from {path}; use --input-format xml or tsv"
+            )
+    if selected_format == "xml":
+        return parse_xml(path), selected_format
+    return read_manifest(path), selected_format
+
+
 def run_download(args: argparse.Namespace) -> int:
     if not args.input.is_file():
         raise FileNotFoundError(args.input)
@@ -81,13 +117,17 @@ def run_download(args: argparse.Namespace) -> int:
     tmp_dir.mkdir(parents=True, exist_ok=True)
     configure_logging(logs_dir / "download.log", args.verbose)
 
-    records = parse_xml(args.input)
+    records, input_format = load_records(args.input, args.input_format)
+    manifest_path = outdir / "manifest.tsv"
+    write_manifest(records, manifest_path)
     total_sra = sum(record.sra_size_bytes for record in records)
     total_bases = sum(record.total_bases for record in records)
     logging.info("Input: %s", args.input)
     logging.info("Runs: %d", len(records))
     logging.info("Total SRA Normalized size: %s", human_bytes(total_sra))
     logging.info("Total sequenced bases: %.3f Tbp", total_bases / 1e12)
+    logging.info("Input format: %s", input_format)
+    logging.info("Manifest: %s", manifest_path)
 
     usage = shutil.disk_usage(outdir)
     logging.info("Free space at destination: %s", human_bytes(usage.free))
