@@ -1,14 +1,8 @@
 # NCBI SRA BioProject Downloader
 
-`sra-bioproject` parses an NCBI SRA XML export, selects each run's lossless
-`SRA Normalized` object, and downloads it with resume, retry, size, and MD5
-verification. It can also create a durable TSV manifest or optionally convert
-verified SRA objects to compressed FASTQ.
+`sra-bioproject` parses an NCBI SRA XML export, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, size, and MD5 verification. It can also create a durable TSV manifest or optionally convert verified SRA objects to compressed FASTQ.
 
-`SRA Normalized` is NCBI's full normalized SRA object produced by the primary
-ETL workflow. The tool requires `semantic_name="SRA Normalized"` and
-`supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced
-quality representation is not lossless.
+`SRA Normalized` is NCBI's full normalized SRA object produced by the primary ETL workflow. The tool requires `semantic_name="SRA Normalized"` and `supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced quality representation is not lossless.
 
 ## Installation
 
@@ -27,9 +21,7 @@ For editable development installation with pytest:
 python -m pip install -e '.[dev]'
 ```
 
-FASTQ mode additionally requires `fasterq-dump` and, unless validation is
-disabled, `vdb-validate` from the SRA Toolkit. `pigz` is used when available;
-otherwise the required system `gzip` command is used.
+FASTQ mode additionally requires `fasterq-dump` and, unless validation is disabled, `vdb-validate` from the SRA Toolkit. `pigz` is used when available; otherwise the required system `gzip` command is used.
 
 ## Manifest
 
@@ -40,8 +32,7 @@ sra-bioproject manifest export.xml --output manifest.tsv
 python scripts/sra_xml_to_manifest.py export.xml --output manifest.tsv
 ```
 
-Use `--output -` for standard output. Columns are documented in
-[docs/design.md](docs/design.md).
+Use `--output -` for standard output. Columns are documented in [docs/design.md](docs/design.md).
 
 ## Download
 
@@ -58,10 +49,7 @@ sra-bioproject download export.xml --outdir /data/my-project --jobs 2
 sra-bioproject download manifest.tsv --outdir /data/my-project --jobs 2
 ```
 
-Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to
-override it. Interrupted commands are safe to rerun. Curl resumes `.part`
-files, verified completed files are skipped, and invalid completed files are
-quarantined as `.bad.<timestamp>`.
+Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to override it. Interrupted commands are safe to rerun. Curl resumes `.part` files, verified completed files are skipped, and invalid completed files are quarantined as `.bad.<timestamp>`.
 
 For an overnight macOS run, create the destination before redirecting output:
 
@@ -97,16 +85,9 @@ sra-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
 
 ## FASTQ Conversion
 
-SRA is the default output. Add `--mode fastq` to run `fasterq-dump
---split-files`, compress each FASTQ with `pigz` or `gzip`, test gzip integrity,
-and write a completion marker. Conversion is sequential to limit temporary
-storage and I/O pressure. `vdb-validate` runs by default; use
-`--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an
-SRA object only after all compressed FASTQ files pass their checks.
+SRA is the default output. Add `--mode fastq` to run `fasterq-dump --split-files`, compress each FASTQ with `pigz` or `gzip`, test gzip integrity, and write a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an SRA object only after all compressed FASTQ files pass their checks.
 
-FASTQ conversion can require substantially more temporary and final disk space
-than the normalized SRA download. Plan for the SRA file, uncompressed staging
-FASTQ, compression output, and toolkit scratch space to coexist.
+FASTQ conversion can require substantially more temporary and final disk space than the normalized SRA download. Plan for the SRA file, uncompressed staging FASTQ, compression output, and toolkit scratch space to coexist.
 
 ## Output Layout
 
@@ -121,17 +102,10 @@ OUTDIR/
     └── failed_accessions.txt   present only after persistent failures
 ```
 
-The dry run reports normalized SRA size, sequenced bases, and destination free
-space. A final filename is never considered complete by name alone: available
-size and MD5 metadata must verify before an atomic `.part` rename or skip.
+The dry run reports normalized SRA size, sequenced bases, and destination free space. A final filename is never considered complete by name alone: available size and MD5 metadata must verify before an atomic `.part` rename or skip.
 
-Exit status `0` means success, `1` means a fatal error or persistent run
-failure, and `130` means keyboard interruption. See
-[docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
+Exit status `0` means success, `1` means a fatal error or persistent run failure, and `130` means keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
 
 ## Limitations
 
-The parser targets NCBI SRA experiment-package XML exports and requires one
-unique lossless normalized object per run. Downloads depend on `curl` and the
-URLs remaining valid. The tool does not fetch BioProjects by accession, manage
-credentials, or parallelize FASTQ conversion.
+The parser targets NCBI SRA experiment-package XML exports and requires one unique lossless normalized object per run. Downloads depend on `curl` and the URLs remaining valid. The tool does not fetch BioProjects by accession, manage credentials, or parallelize FASTQ conversion.
