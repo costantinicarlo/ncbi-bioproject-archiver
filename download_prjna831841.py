@@ -377,8 +377,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--outdir",
         type=Path,
-        default=Path("/Volumes/Bionfo-1/PRJNA831841"),
-        help="Project output directory (default: /Volumes/Bionfo-1/PRJNA831841)",
+        default=Path("/Volumes/Bioinfo-1/PRJNA831841"),
+        help="Project output directory (default: /Volumes/Bioinfo-1/PRJNA831841)",
     )
     parser.add_argument(
         "--mode",
@@ -424,7 +424,24 @@ def main() -> int:
     if not args.xml.is_file():
         raise FileNotFoundError(args.xml)
 
-    outdir = args.outdir.expanduser().resolve()
+    requested_outdir = args.outdir.expanduser()
+
+    # On macOS, fail clearly if a destination under /Volumes refers to a
+    # misspelled or currently unmounted volume. Otherwise mkdir() may fail
+    # before logging has been configured, or a command-line redirection may
+    # prevent the program from starting at all.
+    parts = requested_outdir.parts
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] == "Volumes":
+        volume_root = Path("/Volumes") / parts[2]
+        if not volume_root.is_dir():
+            raise FileNotFoundError(
+                f"Destination volume is not mounted: {volume_root}. "
+                "Check the spelling with: ls -la /Volumes"
+            )
+        if not os.access(volume_root, os.W_OK):
+            raise PermissionError(f"Destination volume is not writable: {volume_root}")
+
+    outdir = requested_outdir.resolve()
     sra_dir = outdir / "sra"
     fastq_dir = outdir / "fastq"
     tmp_dir = outdir / "tmp"
