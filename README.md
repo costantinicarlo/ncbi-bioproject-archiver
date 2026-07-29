@@ -21,7 +21,7 @@ For editable development installation with pytest:
 python -m pip install -e '.[dev]'
 ```
 
-FASTQ mode additionally requires `fasterq-dump` and, unless validation is disabled, `vdb-validate` from the SRA Toolkit. `pigz` is used when available; otherwise the required system `gzip` command is used.
+For `--mode fastq` to complete, the `fasterq-dump` binary and at least one compression binary, either `pigz` or `gzip`, must be installed and available on `PATH`. Unless validation is disabled with `--skip-vdb-validate`, the `vdb-validate` binary from the SRA Toolkit must also be installed. When both compression tools are available, `pigz` is preferred; otherwise `gzip` is used.
 
 ## Manifest
 
@@ -85,7 +85,20 @@ sra-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
 
 ## FASTQ Conversion
 
-SRA is the default output. Add `--mode fastq` to run `fasterq-dump --split-files`, compress each FASTQ with `pigz` or `gzip`, test gzip integrity, and write a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an SRA object only after all compressed FASTQ files pass their checks.
+FASTQ conversion may be selected during the initial download or run later as a separate transaction. There is no `--fasterq-dump` option; FASTQ conversion is enabled with `--mode fastq` on the `download` command.
+
+Before using `--mode fastq`, confirm that `fasterq-dump` and either `pigz` or `gzip` are installed and available on `PATH`. Also install `vdb-validate` unless the command will use `--skip-vdb-validate`.
+
+To download SRA objects now and convert them later, run:
+
+```bash
+sra-bioproject download manifest.tsv --outdir /data/my-project
+sra-bioproject download manifest.tsv --outdir /data/my-project --mode fastq
+```
+
+The second command verifies and skips the completed SRA files, then converts them sequentially. It requires the same XML or manifest input and output directory used for the download, and the verified SRA files must still be present under `OUTDIR/sra/`. The command remains safely resumable: completed FASTQ outputs with valid completion markers are skipped.
+
+Alternatively, add `--mode fastq` to the initial download command to begin conversion immediately after every required SRA object has downloaded and verified. In either workflow, the application runs `fasterq-dump --split-files`, compresses each FASTQ with `pigz` or `gzip`, tests gzip integrity, and writes a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an SRA object only after all compressed FASTQ files pass their checks.
 
 FASTQ conversion can require substantially more temporary and final disk space than the normalized SRA download. Plan for the SRA file, uncompressed staging FASTQ, compression output, and toolkit scratch space to coexist.
 
