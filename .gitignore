@@ -19,3 +19,5 @@ tmp/
 sra/
 fastq/
 failed_accessions.txt
+.vscode/
+*.code-workspace
