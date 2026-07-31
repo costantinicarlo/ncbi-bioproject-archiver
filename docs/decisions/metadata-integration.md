@@ -2,7 +2,7 @@
 
 ## Observed Drift
 
-The 0.1.0 repository already used the intended `sra_bioproject` package and `sra-bioproject` command. It had only `manifest` and `download`, one canonical SRA XML parser, no network client, and no metadata models. The committed PRJNA831841 example currently contains 54 runs, not the 187 stated in the integration brief; the committed XML and deterministic manifest remain the source of truth.
+The 0.1.0 repository already used the intended `sra_bioproject` package and `sra-bioproject` command. It had only `manifest` and `download`, one canonical SRA XML parser, no network client, and no metadata models. The committed PRJNA831841 XML and current explicit Entrez links both contain 187 SRA records; the deterministic committed manifest remains the source of truth for offline compatibility.
 
 ## Canonical Interface
 

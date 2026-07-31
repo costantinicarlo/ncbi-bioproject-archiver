@@ -19,6 +19,16 @@ LINKS = {
     "child": "bioproject_bioproject_u2d",
 }
 
+LINK_DATABASES = {
+    LINKS["biosample"]: "biosample", LINKS["sra"]: "sra",
+    LINKS["pubmed"]: "pubmed", LINKS["pmc"]: "pmc",
+    LINKS["assembly"]: "assembly", LINKS["parent"]: "bioproject",
+    LINKS["child"]: "bioproject", "bioproject_dbvar": "dbvar",
+    "bioproject_gds": "gds", "bioproject_genome": "genome",
+    "bioproject_nuccore": "nuccore", "bioproject_protein": "protein",
+    "bioproject_taxonomy": "taxonomy",
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -37,6 +47,23 @@ def _empty_xml(root: str) -> bytes:
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<{root} />\n'.encode()
 
 
+def _discover_links(client: MetadataClient, uid: str) -> bytes:
+    combined = ET.Element("eLinkResult")
+    link_set = ET.SubElement(combined, "LinkSet")
+    ET.SubElement(link_set, "DbFrom").text = "bioproject"
+    id_list = ET.SubElement(link_set, "IdList")
+    ET.SubElement(id_list, "Id").text = uid
+    for linkname, database in LINK_DATABASES.items():
+        response = client.entrez(
+            "elink.fcgi", dbfrom="bioproject", db=database, id=uid,
+            linkname=linkname, cmd="neighbor",
+        )
+        root = ET.fromstring(response.content)
+        for group in root.findall(".//LinkSetDb"):
+            link_set.append(group)
+    return ET.tostring(combined, encoding="utf-8", xml_declaration=True)
+
+
 def retrieve(client: MetadataClient, accession: str, include_literature_search: bool = False, require_sra: bool = True) -> tuple[list[RawResponseRecord], list[str]]:
     accession = accession.strip().upper()
     search = client.entrez("esearch.fcgi", db="bioproject", term=f"{accession}[Project Accession]", retmode="json")
@@ -45,11 +72,12 @@ def retrieve(client: MetadataClient, accession: str, include_literature_search: 
     if len(uids) != 1:
         raise RuntimeError(f"BioProject accession {accession} resolved to {len(uids)} records")
     uid = uids[0]
-    project = client.entrez("esummary.fcgi", db="bioproject", id=uid, retmode="xml")
-    links = client.entrez("elink.fcgi", dbfrom="bioproject", id=uid, cmd="neighbor")
+    project = client.entrez("efetch.fcgi", db="bioproject", id=uid, retmode="xml")
+    links_content = _discover_links(client, uid)
+    links = type(project)(links_content, 200, "application/xml", "entrez:elink")
     records = [
-        _raw("bioproject.xml", project, "bioproject", "esummary", query=accession),
-        _raw("entrez_links.xml", links, "bioproject", "elink", query=uid),
+        _raw("bioproject.xml", project, "bioproject", "efetch", query=accession),
+        _raw("entrez_links.xml", links, "bioproject", "elink", query=uid, linkname="explicit verified links"),
     ]
     warnings = []
     targets = (

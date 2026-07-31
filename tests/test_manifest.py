@@ -21,5 +21,8 @@ def test_manifest_headers_and_values(tmp_path: Path) -> None:
 
 def test_committed_example_manifest_is_current(tmp_path: Path) -> None:
     generated = tmp_path / "manifest.tsv"
-    write_manifest(parse_xml(EXAMPLE_DIR / "NCBI_PRJNA831841.xml"), generated)
+    records = parse_xml(EXAMPLE_DIR / "NCBI_PRJNA831841.xml")
+    write_manifest(records, generated)
+    assert len(records) == 187
+    assert all("lite" not in record.url.lower() for record in records)
     assert generated.read_bytes() == (EXAMPLE_DIR / "PRJNA831841_manifest.tsv").read_bytes()
