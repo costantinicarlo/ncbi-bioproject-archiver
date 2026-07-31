@@ -379,8 +379,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--outdir",
         type=Path,
-        default=Path("/Volumes/Bioinfo-1/PRJNA831841"),
-        help="Project output directory (default: /Volumes/Bioinfo-1/PRJNA831841)",
+        required=True,
+        help="Project output directory (required)",
     )
     parser.add_argument(
         "--mode",
