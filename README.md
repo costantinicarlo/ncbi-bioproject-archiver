@@ -155,3 +155,12 @@ Exit statuses are `0` complete success, `1` general failure, `2` invalid input/c
 ## Limitations
 
 The parser requires one unique lossless normalized object per run. Downloads depend on `curl` and the URLs remaining valid. Metadata retrieval depends on current public Entrez records; optional resources may be absent and produce explicit empty tables or partial status. FASTQ conversion is not parallelized.
+
+## License
+
+The original software and documentation in this repository are licensed under
+the [MIT License](LICENSE).
+
+NCBI records, sequence data, metadata exports and external software used by the
+application remain subject to the terms and policies of their respective
+sources and copyright holders.
