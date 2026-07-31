@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>12345</PMID><Article><ArticleTitle>Fixture publication</ArticleTitle><Journal><Title>Test Journal</Title><JournalIssue><PubDate><Year>2021</Year></PubDate></JournalIssue></Journal><AuthorList><Author><ForeName>Ada</ForeName><LastName>Lovelace</LastName></Author></AuthorList></Article></MedlineCitation><PubmedData><ArticleIdList><ArticleId IdType="doi">10.1000/test</ArticleId></ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>
