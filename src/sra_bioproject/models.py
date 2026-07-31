@@ -21,3 +21,4 @@ class RunRecord:
     sra_size_bytes: int
     md5: str
     url: str
+    library_selection: str = ""

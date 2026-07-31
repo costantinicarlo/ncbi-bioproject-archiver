@@ -107,6 +107,7 @@ def parse_xml(xml_path: Path | str) -> list[RunRecord]:
                     sample_alias=sample.get("alias", "").strip() if sample is not None else "",
                     library_strategy=_text(descriptor, "./LIBRARY_STRATEGY"),
                     library_source=_text(descriptor, "./LIBRARY_SOURCE"),
+                    library_selection=_text(descriptor, "./LIBRARY_SELECTION"),
                     library_layout=_library_layout(experiment),
                     instrument_model=_instrument_model(experiment),
                     total_bases=_required_integer(run.get("total_bases"), accession, "total_bases"),
