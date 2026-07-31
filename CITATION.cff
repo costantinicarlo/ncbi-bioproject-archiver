@@ -8,6 +8,7 @@ authors:
 repository-code: "https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader"
 license: MIT
 version: 0.2.0
+date-released: "2026-07-31"
 keywords:
   - NCBI
   - SRA
