@@ -12,6 +12,9 @@ import sys
 from .downloader import check_command, download_batch, human_bytes
 from .fastq import convert_one, fastq_complete, validate_vdb
 from .manifest import read_manifest, write_manifest
+from .metadata.client import MetadataClient
+from .metadata.snapshot import create_snapshot, normalize_existing
+from .metadata.validation import validate_project
 from .validation import validate_destination, verify_download
 from .xml_parser import parse_xml
 
@@ -76,7 +79,75 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--dry-run", action="store_true")
     download_parser.add_argument("--verbose", action="store_true")
     download_parser.set_defaults(handler=run_download)
+
+    for name, help_text, write_manifest_output in (
+        ("metadata", "retrieve and normalize BioProject metadata", False),
+        ("snapshot", "retrieve metadata and create a download manifest", True),
+    ):
+        metadata_parser = subparsers.add_parser(name, help=help_text)
+        metadata_parser.add_argument("accession", help="NCBI BioProject accession")
+        metadata_parser.add_argument("--outdir", type=Path, required=True, help="project output directory")
+        metadata_parser.add_argument("--refresh", action="store_true", help="archive and replace an existing snapshot")
+        metadata_parser.add_argument("--include-literature-search", action="store_true", help="search Europe PMC for accession mentions")
+        metadata_parser.add_argument("--sra-xml", type=Path, help="reuse an existing SRA experiment-package XML file")
+        metadata_parser.add_argument("--email", default=os.getenv("NCBI_EMAIL", ""), help="NCBI contact email (or NCBI_EMAIL)")
+        metadata_parser.add_argument("--tool", default=os.getenv("NCBI_TOOL", "sra-bioproject"), help="NCBI tool identifier (or NCBI_TOOL)")
+        metadata_parser.add_argument("--api-key", default=os.getenv("NCBI_API_KEY", ""), help=argparse.SUPPRESS)
+        metadata_parser.add_argument("--timeout", type=positive_integer, default=60, help="request timeout in seconds")
+        metadata_parser.add_argument("--attempts", type=positive_integer, default=4, help="request attempts for transient failures")
+        metadata_parser.set_defaults(handler=run_metadata, write_download_manifest=write_manifest_output)
+
+    normalize_parser = subparsers.add_parser("metadata-normalize", help="rebuild derived files from stored raw metadata")
+    normalize_parser.add_argument("--metadata-dir", type=Path, required=True)
+    normalize_parser.add_argument("--manifest", type=Path, help="also write a download manifest")
+    normalize_parser.set_defaults(handler=run_metadata_normalize)
+
+    validate_parser = subparsers.add_parser("validate", help="validate a local BioProject snapshot")
+    validate_parser.add_argument("project_dir", type=Path)
+    validate_parser.set_defaults(handler=run_validate)
     return parser
+
+
+def run_metadata(args: argparse.Namespace) -> int:
+    if args.sra_xml is not None and not args.sra_xml.is_file():
+        raise FileNotFoundError(args.sra_xml)
+    outdir = validate_destination(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    client = MetadataClient(
+        email=args.email, tool=args.tool, api_key=args.api_key,
+        timeout=args.timeout, attempts=args.attempts,
+    )
+    try:
+        _, partial = create_snapshot(
+            args.accession, outdir, client=client, refresh=args.refresh,
+            include_literature_search=args.include_literature_search,
+            write_download_manifest=args.write_download_manifest,
+            sra_xml=args.sra_xml, command=sys.argv,
+        )
+    except RuntimeError as exc:
+        logging.error("Required metadata retrieval incomplete: %s", exc)
+        return 3
+    except FileExistsError:
+        raise
+    except Exception as exc:
+        logging.error("Metadata normalization or validation failed: %s", exc)
+        return 5
+    return 4 if partial else 0
+
+
+def run_metadata_normalize(args: argparse.Namespace) -> int:
+    normalize_existing(args.metadata_dir, args.manifest)
+    return 0
+
+
+def run_validate(args: argparse.Namespace) -> int:
+    errors = validate_project(args.project_dir)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 5
+    print(f"Snapshot is valid: {args.project_dir}")
+    return 0
 
 
 def run_manifest(args: argparse.Namespace) -> int:
@@ -220,6 +291,9 @@ def entrypoint() -> None:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         raise SystemExit(130)
+    except (argparse.ArgumentError, ValueError, FileExistsError) as exc:
+        logging.error("Invalid input: %s", exc)
+        raise SystemExit(2)
     except Exception as exc:
         logging.exception("Fatal error: %s", exc)
         raise SystemExit(1)

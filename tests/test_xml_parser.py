@@ -16,6 +16,7 @@ def test_parses_metadata_and_sorts_runs() -> None:
     assert (first.experiment_accession, first.experiment_alias) == ("SRX000001", "Library A")
     assert (first.biosample, first.sample_alias) == ("SAMN000001", "Sample A")
     assert (first.library_strategy, first.library_source) == ("WGS", "GENOMIC")
+    assert first.library_selection == ""
     assert (first.library_layout, first.instrument_model) == ("PAIRED", "Sequel II")
     assert (first.total_bases, first.total_spots, first.sra_size_bytes) == (100, 10, 5)
 

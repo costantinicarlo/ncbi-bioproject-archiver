@@ -68,3 +68,19 @@ printf 'expected=%s complete=%s\n' "$expected" "$complete"
 ```
 
 The count is a progress aid, not integrity proof; the application performs the authoritative size and MD5 checks when restarted.
+
+## Metadata Retrieval
+
+Set `NCBI_EMAIL` to a real contact address. `NCBI_API_KEY` is optional and is never written to snapshot provenance. HTTP 429 and transient 5xx/TLS failures are retried with bounded backoff; persistent required-service failures exit with status 3.
+
+A snapshot with optional sources missing has `status: partial`, records warnings, and exits with status 4. Missing publication rows may simply mean no NCBI link exists; Europe PMC accession searching is optional and must be requested explicitly.
+
+BioSample attributes are heterogeneous. Inspect `metadata/derived/sample_attributes.tsv` when a field is absent from the stable wide table. Runs whose BioSample cannot be resolved remain visible in `runs.tsv` and should be investigated through validation output.
+
+To rebuild normalized products without network access:
+
+```bash
+sra-bioproject metadata-normalize --metadata-dir /data/PRJNA/metadata --manifest /data/PRJNA/manifest.tsv
+```
+
+Use `--refresh` to archive an older snapshot before retrieval. Validate checksums and manifest consistency with `sra-bioproject validate /data/PRJNA`. A checksum mismatch indicates corruption or manual alteration; restore from `metadata/archive/` or retrieve a fresh snapshot. Current NCBI records may legitimately differ from an older archived snapshot.

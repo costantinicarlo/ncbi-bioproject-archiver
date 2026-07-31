@@ -1,6 +1,12 @@
 # NCBI SRA BioProject Downloader
 
-`sra-bioproject` parses an NCBI SRA XML export, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, size, and MD5 verification. It can also create a durable TSV manifest or optionally convert verified SRA objects to compressed FASTQ.
+`sra-bioproject` treats a BioProject directory as a reproducible acquisition unit:
+
+```text
+BioProject accession -> metadata snapshot -> run manifest -> verified SRA download -> optional FASTQ
+```
+
+It preserves raw NCBI responses, writes stable normalized JSON/TSV products, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, size, and MD5 verification.
 
 `SRA Normalized` is NCBI's full normalized SRA object produced by the primary ETL workflow. The tool requires `semantic_name="SRA Normalized"` and `supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced quality representation is not lossless.
 
@@ -33,6 +39,28 @@ python scripts/sra_xml_to_manifest.py export.xml --output manifest.tsv
 ```
 
 Use `--output -` for standard output. Columns are documented in [docs/design.md](docs/design.md).
+
+## Metadata Snapshots
+
+Set a contact email for substantial NCBI retrievals:
+
+```bash
+export NCBI_EMAIL=researcher@example.org
+sra-bioproject metadata PRJNA831841 --outdir /data/PRJNA831841
+sra-bioproject snapshot PRJNA831841 --outdir /data/PRJNA831841
+```
+
+`metadata` retrieves and normalizes metadata only. `snapshot` additionally writes `manifest.tsv`; neither command downloads sequence data. Add `--include-literature-search` to search Europe PMC for accession mentions, or `--sra-xml existing.xml` to reuse an existing SRA XML export. NCBI-curated links and database links remain distinct from text-discovered Europe PMC associations.
+
+Existing snapshots are never overwritten implicitly. Use `--refresh` to archive the previous metadata state under `metadata/archive/<timestamp>/`. Rebuild derived files without network access with:
+
+```bash
+sra-bioproject metadata-normalize --metadata-dir /data/PRJNA831841/metadata \
+  --manifest /data/PRJNA831841/manifest.tsv
+sra-bioproject validate /data/PRJNA831841
+```
+
+Raw files are server responses preserved without reformatting. Derived files are normalized products for scripting and inspection. Metadata describes records and provenance; it is not sequence data and does not recursively download linked resources.
 
 ## Download
 
@@ -107,6 +135,11 @@ FASTQ conversion can require substantially more temporary and final disk space t
 ```text
 OUTDIR/
 ├── manifest.tsv
+├── metadata/
+│   ├── snapshot.json
+│   ├── raw/             preserved NCBI and optional Europe PMC responses
+│   ├── derived/         project.json and stable TSV tables
+│   └── archive/         prior snapshots created by --refresh
 ├── sra/                 verified SRA objects and resumable .part files
 ├── fastq/               optional .fastq.gz files and completion markers
 ├── tmp/                 FASTQ staging and scratch data
@@ -117,11 +150,11 @@ OUTDIR/
 
 The dry run reports normalized SRA size, sequenced bases, and destination free space. A final filename is never considered complete by name alone: available size and MD5 metadata must verify before an atomic `.part` rename or skip.
 
-Exit status `0` means success, `1` means a fatal error or persistent run failure, and `130` means keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
+Exit statuses are `0` complete success, `1` general failure, `2` invalid input/configuration, `3` required retrieval incomplete, `4` optional metadata missing, `5` normalization/validation failure, and `130` keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
 
 ## Limitations
 
-The parser targets NCBI SRA experiment-package XML exports and requires one unique lossless normalized object per run. Downloads depend on `curl` and the URLs remaining valid. The tool does not fetch BioProjects by accession, manage credentials, or parallelize FASTQ conversion.
+The parser requires one unique lossless normalized object per run. Downloads depend on `curl` and the URLs remaining valid. Metadata retrieval depends on current public Entrez records; optional resources may be absent and produce explicit empty tables or partial status. FASTQ conversion is not parallelized.
 
 ## License
 

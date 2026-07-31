@@ -10,3 +10,5 @@ The Git history deliberately retains the incident sequence as working snapshots.
 6. `prototype-v1.2` added `curl --retry-all-errors`, stopped cancelling the executor, collected failures independently, and made later passes contain only failed runs. Persistent failures are written to `logs/failed_accessions.txt`.
 
 Separate commits and tags preserve what changed, why observed behavior looked partial, and which fix addressed each failure. The reusable package follows in later commits; the exact final prototype remains under `legacy/` for comparison.
+
+1. Version 0.2.0 adds comprehensive BioProject metadata snapshots. The existing SRA parser remains canonical for manual and retrieved XML, while a reusable Entrez client preserves raw records and produces normalized project, sample, run, publication, relationship, and linked-resource products with checksum provenance.

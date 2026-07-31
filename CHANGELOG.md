@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Added reproducible BioProject metadata snapshots, normalization, provenance,
+  validation, refresh archival and optional literature discovery.
+- Added the MIT License, citation metadata and third-party material notices to
+  the 0.2.0 package through the licensed 0.1.0 release history.
+
 ## 0.1.0
 
 ### Added
