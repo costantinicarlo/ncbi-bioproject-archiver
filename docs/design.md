@@ -25,3 +25,15 @@ FASTQ conversion is sequential because `fasterq-dump`, scratch I/O, and compress
 Runtime data (`sra/`, `fastq/`, `tmp/`, logs, partials, and quarantined files) are excluded from Git because they are large, mutable, and reproducible from the committed XML/manifest provenance.
 
 Mounted-volume validation is macOS-specific and applies only to paths below `/Volumes`. XML/TSV parsing, ordinary paths, curl execution, checksums, retries, and FASTQ workflows are portable to Linux and macOS.
+
+## Metadata Architecture
+
+BioProject is the discovery hub, while BioSample carries heterogeneous sample provenance. Entrez ESearch resolves the accession, ESummary preserves the project record, and ELink discovers explicit relationships. The current link definitions are verified through EInfo and include `bioproject_biosample_all`, `bioproject_sra_all`, `bioproject_pubmed`, `bioproject_pmc`, `bioproject_assembly_all`, `bioproject_bioproject_d2u`, and `bioproject_bioproject_u2d`.
+
+Raw responses are immutable evidence. Normalized products are reproducible interpretations of that evidence. `samples.tsv` provides stable common fields while `sample_attributes.tsv` preserves every original BioSample attribute in long form. `runs.tsv` and `manifest.tsv` derive from the same `RunRecord` objects; the manifest is the download-focused projection. Linked resources are inventoried rather than recursively downloaded.
+
+NCBI project and database links retain curated/database confidence. Europe PMC accession search is opt-in and records `text_discovered` confidence plus query evidence. Publication deduplication uses PMID, PMCID, normalized DOI, then exact normalized title.
+
+Schema versions are independent constants in `metadata/schemas.py`. Readers should reject unsupported major versions; future compatible columns may increment minor versions. Incompatible changes require a migration path from preserved raw data. Refresh archives the complete previous metadata state before writing a new snapshot.
+
+Required BioProject and SRA failures stop the workflow. Optional PubMed, PMC, Assembly, and Europe PMC failures produce a partial snapshot and exit status 4. Every raw and derived artifact is written atomically and recorded with SHA-256 and size in `snapshot.json`.

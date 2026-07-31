@@ -19,5 +19,8 @@ tmp/
 sra/
 fastq/
 failed_accessions.txt
+# Runtime metadata snapshots are ignored only in the conventional local output root.
+output/*/metadata/
+output/*/manifest.tsv
 .vscode/
 *.code-workspace
