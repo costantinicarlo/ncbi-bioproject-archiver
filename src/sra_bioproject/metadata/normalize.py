@@ -54,7 +54,7 @@ def write_tsv(path: Path, columns: tuple[str, ...], rows: Iterable[dict[str, obj
     return count
 
 
-def normalize(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[str, dict[str, int]]:
+def normalize(metadata_dir: Path, manifest_path: Path | None = None, retrieved_at: str = "") -> tuple[str, dict[str, object]]:
     raw = metadata_dir / "raw"
     derived = metadata_dir / "derived"
     project = parse_bioproject((raw / "bioproject.xml").read_bytes())
@@ -70,7 +70,7 @@ def normalize(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[st
         publications += parse_europe_pmc((raw / "europe_pmc.json").read_bytes(), project.accession)
     publications = deduplicate_publications(publications)
     project_data = asdict(project)
-    project_data.update({"schema_version": PROJECT_SCHEMA_VERSION,
+    project_data.update({"schema_version": PROJECT_SCHEMA_VERSION, "retrieved_at": retrieved_at or None,
                          "parent_projects": [item.target_accession or item.target_uid for item in links if item.relationship == "bioproject_d2u"],
                          "child_projects": [item.target_accession or item.target_uid for item in links if item.relationship == "bioproject_u2d"]})
     atomic_write(derived / "project.json", (json.dumps(project_data, indent=2, sort_keys=True) + "\n").encode())
@@ -91,5 +91,5 @@ def normalize(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[st
     counts["linked_resources"] = write_tsv(derived / "linked_resources.tsv", LINKED_RESOURCE_COLUMNS, ({"bioproject": project.accession, **asdict(item)} for item in links if item.target_database not in principal))
     if manifest_path is not None:
         write_manifest(runs, manifest_path)
-    counts["tsv_schema_version"] = TSV_SCHEMA_VERSION  # type: ignore[assignment]
+    counts["tsv_schema_version"] = TSV_SCHEMA_VERSION
     return project.accession, counts

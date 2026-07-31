@@ -25,10 +25,15 @@ def fixture_records() -> list[RawResponseRecord]:
 
 def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
-    snapshot, partial = create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    snapshot, partial = create_snapshot(
+        "PRJNA000001", tmp_path, write_download_manifest=True,
+        command=["snapshot", "--api-key", "secret"],
+    )
     assert snapshot.is_file()
     assert not partial
     assert validate_project(tmp_path) == []
+    assert "secret" not in snapshot.read_text(encoding="utf-8")
+    assert '"retrieved_at"' in (tmp_path / "metadata" / "derived" / "project.json").read_text()
 
     with pytest.raises(FileExistsError, match="--refresh"):
         create_snapshot("PRJNA000001", tmp_path)

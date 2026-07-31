@@ -37,6 +37,23 @@ def _archive(metadata_dir: Path) -> None:
             shutil.move(str(child), destination / child.name)
 
 
+def _safe_command(command: Sequence[str]) -> list[str]:
+    sanitized = []
+    hide_next = False
+    for argument in command:
+        if hide_next:
+            sanitized.append("REDACTED")
+            hide_next = False
+        elif argument == "--api-key":
+            sanitized.append(argument)
+            hide_next = True
+        elif argument.startswith("--api-key="):
+            sanitized.append("--api-key=REDACTED")
+        else:
+            sanitized.append(argument)
+    return sanitized
+
+
 def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | None = None, refresh: bool = False, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
     metadata_dir = outdir / "metadata"
     if (metadata_dir / "snapshot.json").exists():
@@ -64,7 +81,7 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
         detail.update({"database": "sra", "operation": "supplied_file", "content_type": "application/xml"})
         raw_details.append(detail)
     manifest_path = outdir / "manifest.tsv" if write_download_manifest else None
-    actual_accession, counts = normalize(metadata_dir, manifest_path)
+    actual_accession, counts = normalize(metadata_dir, manifest_path, started)
     if actual_accession != accession.upper():
         raise ValueError(f"Requested {accession} but retrieved {actual_accession}")
     derived_details = [_describe(path, metadata_dir, int(counts.get(path.stem, 0))) for path in sorted((metadata_dir / "derived").iterdir())]
@@ -75,7 +92,7 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
         "retrieved_at": started, "completed_at": _now(), "status": "partial" if warnings else "complete",
         "application": "sra-bioproject", "application_version": __version__,
         "python_version": platform.python_version(), "platform": platform.platform(),
-        "command": list(command), "include_literature_search": include_literature_search,
+        "command": _safe_command(command), "include_literature_search": include_literature_search,
         "sources": sorted({item.database for item in records}), "queries": [{"database": item.database, "operation": item.operation, "query": item.query, "linkname": item.linkname} for item in records],
         "raw_files": sorted(raw_details, key=lambda item: str(item["path"])),
         "derived_files": sorted(derived_details, key=lambda item: str(item["path"])),
@@ -85,5 +102,5 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
     return metadata_dir / "snapshot.json", bool(warnings)
 
 
-def normalize_existing(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[str, dict[str, int]]:
+def normalize_existing(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[str, dict[str, object]]:
     return normalize(metadata_dir, manifest_path)

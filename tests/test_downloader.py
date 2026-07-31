@@ -120,3 +120,15 @@ def test_positive_integer_arguments(option: str) -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["download", "input.xml", "--outdir", "output", option, "0"])
+
+
+@pytest.mark.parametrize("command", ["metadata", "snapshot"])
+def test_metadata_commands_parse_network_settings(command: str) -> None:
+    args = build_parser().parse_args([
+        command, "PRJNA1", "--outdir", "output", "--timeout", "30",
+        "--attempts", "2", "--include-literature-search",
+    ])
+    assert args.accession == "PRJNA1"
+    assert args.timeout == 30
+    assert args.attempts == 2
+    assert args.include_literature_search
