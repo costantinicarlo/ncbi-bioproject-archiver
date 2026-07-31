@@ -24,11 +24,29 @@ ps aux | grep '[s]ra-bioproject'
 
 ## Download Failures
 
-Curl exit status 35 indicates an SSL/TLS handshake failure. The downloader uses `--retry-all-errors` and retry passes, but unstable links may benefit from:
+Curl exit status 35 indicates an SSL/TLS transport failure (for example `Recv failure: Connection reset by peer`).
+
+Curl exit status 60 indicates TLS certificate-chain verification failed (for example `SSL certificate problem: unable to get local issuer certificate`). This is usually a trust-path issue between your host and the endpoint (enterprise proxy/VPN TLS inspection, stale trust store, or intermittent resolver/network path problems).
+
+The downloader uses `--retry-all-errors` and retry passes, but unstable links may still benefit from lowering concurrency:
 
 ```bash
 sra-bioproject download manifest.tsv --outdir /data/my-project --jobs 1
 ```
+
+For exit 60, verify the endpoint and trust path explicitly:
+
+```bash
+curl -Iv https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR12345678/SRR12345678
+```
+
+If your environment requires a custom CA chain (for example an enterprise interception CA), use curl with that bundle:
+
+```bash
+curl --cacert /path/to/ca-bundle.pem -I https://sra-pub-run-odp.s3.amazonaws.com/...
+```
+
+Avoid disabling certificate verification (for example `-k` or `--insecure`) for production downloads.
 
 `.part` files are resumable and should normally be left in place. Restart the same command safely. An oversized part is discarded automatically. A size or MD5 mismatch quarantines the object as `.bad.<timestamp>`; preserve it while checking storage and transport errors, then rerun.
 
