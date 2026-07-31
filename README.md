@@ -122,3 +122,12 @@ Exit status `0` means success, `1` means a fatal error or persistent run failure
 ## Limitations
 
 The parser targets NCBI SRA experiment-package XML exports and requires one unique lossless normalized object per run. Downloads depend on `curl` and the URLs remaining valid. The tool does not fetch BioProjects by accession, manage credentials, or parallelize FASTQ conversion.
+
+## License
+
+The original software and documentation in this repository are licensed under
+the [MIT License](LICENSE).
+
+NCBI records, sequence data, metadata exports and external software used by the
+application remain subject to the terms and policies of their respective
+sources and copyright holders.

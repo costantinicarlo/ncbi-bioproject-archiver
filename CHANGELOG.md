@@ -2,6 +2,18 @@
 
 ## 0.1.0
 
+### Added
+
+- MIT License for the repository's original software and documentation.
+- `CITATION.cff` metadata for scholarly citation.
+- `THIRD_PARTY_NOTICES.md` clarifying the status of NCBI records, sequence data
+  and externally invoked software.
+
+### Changed
+
+- Updated Python package metadata to use the SPDX `MIT` licence expression and
+  include the root `LICENSE` file in distributions.
+
 - Generalized the downloader as the `sra_bioproject` package and `sra-bioproject` CLI.
 - Added strict NCBI SRA XML parsing and reproducible TSV manifests.
 - Added XML and TSV download inputs, offline regression tests, and operational documentation.
