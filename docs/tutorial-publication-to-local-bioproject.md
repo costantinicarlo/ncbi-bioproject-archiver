@@ -310,8 +310,9 @@ nohup caffeinate -i \
     --outdir "$OUTDIR" \
     --jobs 2 \
   > "$OUTDIR/logs/launcher.log" 2>&1 &
+bg_pid=$!
 
-echo "process id: $!"
+echo "process id: $bg_pid"
 ```
 
 ### Overnight on Linux
@@ -324,8 +325,9 @@ nohup \
     --outdir "$OUTDIR" \
     --jobs 2 \
   > "$OUTDIR/logs/launcher.log" 2>&1 &
+bg_pid=$!
 
-echo "process id: $!"
+echo "process id: $bg_pid"
 ```
 
 On shared systems, use the institution's scheduler or long-session mechanism when required.
