@@ -12,7 +12,7 @@ The existing SRA XML parser and `RunRecord` remain canonical. `runs.tsv` is the 
 
 ## Schema And Lifecycle
 
-Snapshot, project JSON, metadata TSV, and manifest schemas have independent version constants. Raw responses and normalized outputs are SHA-256 indexed. A pre-existing snapshot is rejected unless `--refresh` is used; refresh is transactional and archives the prior state under `metadata/archive/YYYYMMDDTHHMMSSZ/` only after a successful staged replacement.
+Snapshot, project JSON, metadata TSV, and manifest schemas have independent version constants. Raw responses and normalized outputs are SHA-256 indexed. A pre-existing snapshot is rejected unless `--refresh` is used; refresh is transactional and archives the prior state under `metadata/archive/YYYYMMDDTHHMMSSZ-<8hex>/` only after a successful staged replacement.
 
 Required BioProject and SRA retrieval failures stop with exit status 3. Optional publication, assembly, and Europe PMC failures are recorded as partial and return status 4. Europe PMC remains opt-in and its associations are labeled text-discovered rather than curated.
 

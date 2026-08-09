@@ -497,7 +497,7 @@ sra-bioproject snapshot "$PROJECT" \
 The previous metadata state is archived under:
 
 ```text
-metadata/archive/YYYYMMDDTHHMMSSZ/
+metadata/archive/YYYYMMDDTHHMMSSZ-<8hex>/
 ```
 
 Sequence files remain untouched. Compare old and new run manifests before acquiring newly added records.
