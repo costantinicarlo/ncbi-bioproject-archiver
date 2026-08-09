@@ -154,20 +154,29 @@ def validate_project(project_dir: Path) -> list[str]:
             if tuple(reader.fieldnames or ()) != RUN_COLUMNS:
                 errors.append("runs.tsv header does not match the current schema")
             run_rows = list(reader)
-            runs = {row["run_accession"]: row for row in run_rows}
-        if len(runs) != len(run_rows):
+            runs = {}
+            for row in run_rows:
+                raw_accession = row.get("run_accession")
+                accession_key = raw_accession if isinstance(raw_accession, str) else ""
+                runs[accession_key] = row
+        run_accessions = [
+            (row.get("run_accession") if isinstance(row.get("run_accession"), str) else "")
+            for row in run_rows
+        ]
+        if len({item for item in run_accessions if item}) != len([item for item in run_accessions if item]):
             errors.append("runs.tsv contains duplicate run accessions")
         expected_runs = _record_count(snapshot, "runs")
         if expected_runs is None:
             errors.append("snapshot record_counts.runs must be a non-negative integer")
-        elif len(runs) != expected_runs:
+        elif len(run_rows) != expected_runs:
             errors.append("runs.tsv count does not match snapshot provenance")
         for row in run_rows:
             raw_accession = row.get("run_accession", "")
             accession = raw_accession if isinstance(raw_accession, str) else ""
             if not RUN_ACCESSION_RE.fullmatch(accession):
                 errors.append(f"runs.tsv contains invalid run accession: {accession}")
-            if row.get("bioproject", "").strip().upper() != bioproject:
+            bioproject_value = row.get("bioproject", "")
+            if not isinstance(bioproject_value, str) or bioproject_value.strip().upper() != bioproject:
                 errors.append(f"runs.tsv bioproject mismatch for run {accession}")
             sra_size = row.get("sra_size_bytes", "")
             if not isinstance(sra_size, str) or not sra_size.isdigit() or int(sra_size) <= 0:
@@ -184,8 +193,12 @@ def validate_project(project_dir: Path) -> list[str]:
             if tuple(reader.fieldnames or ()) != SAMPLE_COLUMNS:
                 errors.append("samples.tsv header does not match the current schema")
             sample_rows = list(reader)
-        samples = {row["biosample"] for row in sample_rows}
-        if len(samples) != len(sample_rows):
+        biosamples = [
+            (row.get("biosample") if isinstance(row.get("biosample"), str) else "")
+            for row in sample_rows
+        ]
+        samples = {item for item in biosamples if item}
+        if len(samples) != len([item for item in biosamples if item]):
             errors.append("samples.tsv contains duplicate BioSample accessions")
         expected_samples = _record_count(snapshot, "samples")
         if expected_samples is None:
@@ -193,9 +206,18 @@ def validate_project(project_dir: Path) -> list[str]:
         elif len(sample_rows) != expected_samples:
             errors.append("samples.tsv count does not match snapshot provenance")
         for row in sample_rows:
-            if row.get("bioproject", "").strip().upper() != bioproject:
-                errors.append(f"samples.tsv bioproject mismatch for sample {row.get('biosample', '')}")
-        unresolved = sorted({row["biosample"] for row in run_rows if row["biosample"] and row["biosample"] not in samples})
+            bioproject_value = row.get("bioproject", "")
+            biosample_value = row.get("biosample", "")
+            if not isinstance(bioproject_value, str) or bioproject_value.strip().upper() != bioproject:
+                errors.append(f"samples.tsv bioproject mismatch for sample {biosample_value if isinstance(biosample_value, str) else ''}")
+        unresolved = sorted(
+            {
+                biosample
+                for row in run_rows
+                for biosample in [row.get("biosample") if isinstance(row.get("biosample"), str) else ""]
+                if biosample and biosample not in samples
+            }
+        )
         if unresolved:
             errors.append(f"Unresolved run BioSamples: {', '.join(unresolved)}")
 
@@ -206,6 +228,9 @@ def validate_project(project_dir: Path) -> list[str]:
         except json.JSONDecodeError as exc:
             errors.append(f"Invalid project.json: {exc}")
         else:
+            if not isinstance(project_payload, dict):
+                errors.append("project.json must be a JSON object")
+                project_payload = {}
             if project_payload.get("accession", "").strip().upper() != bioproject:
                 errors.append("project.json accession does not match snapshot bioproject")
             if project_payload.get("schema_version") != PROJECT_SCHEMA_VERSION:
@@ -216,10 +241,15 @@ def validate_project(project_dir: Path) -> list[str]:
 
     manifest_path = project_dir / "manifest.tsv"
     if manifest_path.exists() and runs:
-        manifest = {item.run_accession: item for item in read_manifest(manifest_path)}
-        if set(runs) != set(manifest):
+        try:
+            manifest = {item.run_accession: item for item in read_manifest(manifest_path)}
+        except Exception as exc:
+            errors.append(f"manifest.tsv is invalid: {exc}")
+            return errors
+        run_keys = {item for item in runs if item}
+        if run_keys != set(manifest):
             errors.append("manifest and runs.tsv accessions differ")
-        for accession in set(runs) & set(manifest):
+        for accession in run_keys & set(manifest):
             record = manifest[accession]
             if (runs[accession]["url"], runs[accession]["sra_size_bytes"], runs[accession]["md5"]) != (record.url, str(record.sra_size_bytes), record.md5):
                 errors.append(f"manifest and runs.tsv differ for {accession}")
