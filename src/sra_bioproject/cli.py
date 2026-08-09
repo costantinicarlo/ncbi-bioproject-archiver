@@ -243,13 +243,14 @@ def _resolve_download_bioproject(outdir: Path, explicit_bioproject: str | None) 
 
 def _append_native_admission(outdir: Path, archive_id: str, record, result) -> None:
     admissions = archive_module.load_admission_records(outdir)
-    for item in admissions:
-        if (
-            item.get("accession") == record.run_accession
-            and item.get("relative_path") == f"sra/{record.run_accession}"
-            and item.get("observed_sha256") == result.observed_sha256
-        ):
-            return
+    if result.admission_method == "existing":
+        for item in admissions:
+            if (
+                item.get("accession") == record.run_accession
+                and item.get("relative_path") == f"sra/{record.run_accession}"
+                and item.get("observed_sha256") == result.observed_sha256
+            ):
+                return
     payload = archive_module.create_admission_record(
         archive_id,
         {

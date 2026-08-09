@@ -39,6 +39,10 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _utc_filename_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
 def _canonical_json_bytes(payload: object) -> bytes:
     return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
@@ -353,9 +357,9 @@ def publish_provenance_bundle(
     try:
         _atomic_replace(staging / "archive.json", _canonical_json_bytes(validated_archive))
         _atomic_replace(staging / "acquisitions.jsonl", _canonical_jsonl_bytes(validated_admissions))
-        for index, attestation in enumerate(attestations, start=1):
+        for attestation in attestations:
             _atomic_replace(
-                staging / "validations" / f"{index:04d}.json",
+                staging / "validations" / f"{_utc_filename_stamp()}-{uuid.uuid4().hex[:8]}.json",
                 _canonical_json_bytes(attestation),
             )
         os.replace(staging, target)

@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from sra_bioproject import archive
+from sra_bioproject import downloader as downloader_module
 from sra_bioproject.cli import _is_native_new_destination, build_parser, run_download
 from sra_bioproject.downloader import DownloadResult, download_batch, download_one
 from sra_bioproject.manifest import write_manifest
@@ -74,6 +75,32 @@ def test_promotes_exact_size_partial_after_md5_verification(tmp_path: Path) -> N
     assert result.initial_partial_size == 5
     assert (tmp_path / "SRR1").read_bytes() == b"hello"
     assert not (tmp_path / "SRR1.part").exists()
+
+
+def test_download_one_computes_integrity_once_for_completed_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = make_record("SRR1")
+    calls = 0
+
+    original_describe = downloader_module.describe_file_integrity
+
+    def counting_describe(path: Path):
+        nonlocal calls
+        calls += 1
+        return original_describe(path)
+
+    monkeypatch.setattr(downloader_module, "describe_file_integrity", counting_describe)
+
+    def finish(command, check):
+        (tmp_path / "SRR1.part").write_bytes(b"hello")
+        return subprocess.CompletedProcess(command, 0)
+
+    result = download_one(record, tmp_path, "curl", run_command=finish)
+
+    assert result.admission_method == "downloaded_fresh"
+    assert calls == 1
 
 
 def test_quarantines_invalid_completed_file(tmp_path: Path) -> None:
@@ -516,6 +543,60 @@ def test_download_does_not_append_duplicate_admission_after_fresh_then_existing(
     assert admissions[0]["admission_method"] == "downloaded_fresh"
 
 
+def test_download_preserves_reacquisition_history_for_same_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("placeholder\n", encoding="utf-8")
+    outdir = tmp_path / "output"
+    args = build_parser().parse_args([
+        "download",
+        str(manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.load_records", lambda path, input_format: ([make_record("SRR1")], "tsv"))
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    results = iter([
+        DownloadResult(
+            path=outdir / "sra" / "SRR1",
+            admission_method="downloaded_fresh",
+            initial_partial_size=0,
+            observed_size_bytes=5,
+            observed_md5="5d41402abc4b2a76b9719d911017c592",
+            observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        ),
+        DownloadResult(
+            path=outdir / "sra" / "SRR1",
+            admission_method="downloaded_fresh",
+            initial_partial_size=0,
+            observed_size_bytes=5,
+            observed_md5="5d41402abc4b2a76b9719d911017c592",
+            observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        ),
+    ])
+
+    def fake_download_batch(records, sra_dir, logs_dir, curl_path, jobs, batch_attempts, *, download=None, sleep=None, on_success=None):
+        result = next(results)
+        if on_success is not None:
+            on_success(records[0], result)
+        return []
+
+    monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+
+    assert run_download(args) == 0
+    assert run_download(args) == 0
+    admissions = archive.load_admission_records(outdir)
+    assert len(admissions) == 2
+    assert admissions[0]["admission_method"] == "downloaded_fresh"
+    assert admissions[1]["admission_method"] == "downloaded_fresh"
+
+
 def test_download_rolls_back_manifest_when_archive_metadata_init_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -579,6 +660,7 @@ def test_legacy_fastq_download_continues_after_legacy_bootstrap(
     monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
     monkeypatch.setattr("sra_bioproject.cli.download_batch", lambda *args, **kwargs: [])
     monkeypatch.setattr("sra_bioproject.cli.verify_project", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("sra_bioproject.cli.validate_vdb", lambda *args, **kwargs: None)
     monkeypatch.setattr("sra_bioproject.cli.fastq_complete", lambda *args, **kwargs: False)
     conversions = []
     monkeypatch.setattr("sra_bioproject.cli.convert_one", lambda record, sra_path, fastq_dir, tmp_dir, threads, fasterq_dump, pigz_path, gzip_path, delete_sra_after_fastq: conversions.append(record.run_accession))

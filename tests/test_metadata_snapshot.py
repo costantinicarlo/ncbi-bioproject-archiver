@@ -8,6 +8,7 @@ from sra_bioproject.metadata import snapshot as snapshot_module
 from sra_bioproject.metadata.models import RawResponseRecord
 from sra_bioproject.metadata.snapshot import create_snapshot
 from sra_bioproject.metadata.validation import validate_project
+from sra_bioproject.verification import status_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -51,7 +52,7 @@ def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Pat
     assert (archives[0] / "snapshot.json").is_file()
 
 
-def test_snapshot_marks_legacy_destination_when_pre_v3_sra_only_archive_exists(
+def test_snapshot_preserves_legacy_destination_when_pre_v3_sra_only_archive_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -63,8 +64,8 @@ def test_snapshot_marks_legacy_destination_when_pre_v3_sra_only_archive_exists(
 
     create_snapshot("PRJNA000001", tmp_path, write_download_manifest=False)
 
-    archive_metadata = archive.load_archive_metadata(tmp_path)
-    assert archive_metadata["origin"] == "legacy"
+    assert not (tmp_path / "provenance").exists()
+    assert status_project(tmp_path)["state"] == "LEGACY"
 
 
 def test_snapshot_initialization_failure_restores_clean_new_destination(

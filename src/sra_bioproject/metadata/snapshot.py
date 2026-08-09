@@ -210,12 +210,12 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
                     raise ValueError(
                         f"Managed archive identity {archive_metadata['bioproject']} does not match requested {accession.upper()}"
                     )
-            elif not backed_up_metadata:
+            elif not backed_up_metadata and not legacy_destination:
                 archive_module.write_archive_metadata(
                     outdir,
                     archive_module.create_archive_metadata(
                         accession,
-                        origin="legacy" if legacy_destination else "native",
+                        origin="native",
                         application_version=__version__,
                     ),
                 )

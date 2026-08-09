@@ -32,10 +32,23 @@ def _atomic_json_write(path: Path, payload: dict[str, object]) -> Path:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
     return path
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        return
+    finally:
+        os.close(descriptor)
 
 
 def _manifest_path(project_dir: Path) -> Path:
@@ -517,9 +530,6 @@ def verify_project(
             provenance_result = admission_provenance.get(record.run_accession)
         if provenance_result is None:
             admission_method = "legacy_observation"
-            observed_size_bytes = verified_integrities[record.run_accession].size_bytes
-            observed_md5 = verified_integrities[record.run_accession].md5
-            observed_sha256 = verified_integrities[record.run_accession].sha256
             initial_partial_size = 0
         else:
             admission_method = (
@@ -527,10 +537,10 @@ def verify_project(
                 if provenance_result.admission_method == "existing"
                 else provenance_result.admission_method
             )
-            observed_size_bytes = provenance_result.observed_size_bytes
-            observed_md5 = provenance_result.observed_md5
-            observed_sha256 = provenance_result.observed_sha256
             initial_partial_size = provenance_result.initial_partial_size
+        observed_size_bytes = verified_integrities[record.run_accession].size_bytes
+        observed_md5 = verified_integrities[record.run_accession].md5
+        observed_sha256 = verified_integrities[record.run_accession].sha256
         legacy_admissions.append(
             archive_module.create_admission_record(
                 legacy_archive_id,

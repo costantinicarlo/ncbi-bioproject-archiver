@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 
 import pytest
 
@@ -83,3 +84,51 @@ def test_load_admission_records_rejects_unsafe_relative_paths(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="unsafe relative path"):
         archive.load_admission_records(tmp_path)
+
+
+def test_publish_provenance_bundle_uses_timestamp_uuid_attestation_names(tmp_path: Path) -> None:
+    metadata = archive.create_archive_metadata(
+        "PRJNA000001",
+        origin="legacy",
+        application_version="0.3.0",
+    )
+    admissions = [
+        archive.create_admission_record(
+            str(metadata["archive_id"]),
+            {
+                "accession": "SRR000001",
+                "admission_method": "legacy_observation",
+                "initial_partial_size": 0,
+                "expected_size_bytes": 5,
+                "expected_md5": "5d41402abc4b2a76b9719d911017c592",
+                "observed_size_bytes": 5,
+                "observed_md5": "5d41402abc4b2a76b9719d911017c592",
+                "observed_sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+            },
+            relative_path="sra/SRR000001",
+            application_version="0.3.0",
+        )
+    ]
+    attestation = {
+        "schema_version": archive.ATTESTATION_SCHEMA_VERSION,
+        "validation_policy_version": archive.VALIDATION_POLICY_VERSION,
+        "application": archive.APPLICATION_NAME,
+        "application_version": "0.3.0",
+        "mode": "standard",
+        "started_at": "2026-08-09T00:00:00Z",
+        "completed_at": "2026-08-09T00:00:00Z",
+        "archive_id": str(metadata["archive_id"]),
+        "bioproject": "PRJNA000001",
+        "control_fingerprint": "0" * 64,
+        "quick_payload_fingerprint": "1" * 64,
+        "result": "pass",
+        "runs_checked": 1,
+        "per_run": [],
+        "failures": [],
+    }
+
+    archive.publish_provenance_bundle(tmp_path, metadata, admissions, [attestation])
+
+    validations = list((tmp_path / "provenance" / "validations").iterdir())
+    assert len(validations) == 1
+    assert re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}\.json", validations[0].name)
