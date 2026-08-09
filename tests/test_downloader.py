@@ -620,17 +620,55 @@ def test_download_rolls_back_manifest_when_archive_metadata_init_fails(
         return []
 
     monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+    original_write_archive_metadata = archive.write_archive_metadata
 
-    def fail_archive_write(project_dir: Path, metadata):
-        raise OSError("forced archive metadata failure")
+    call_count = 0
 
-    monkeypatch.setattr("sra_bioproject.cli.archive_module.write_archive_metadata", fail_archive_write)
+    def fail_archive_write_once(project_dir: Path, metadata):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("forced archive metadata failure")
+        return original_write_archive_metadata(project_dir, metadata)
+
+    monkeypatch.setattr("sra_bioproject.cli.archive_module.write_archive_metadata", fail_archive_write_once)
 
     with pytest.raises(OSError, match="forced archive metadata failure"):
         run_download(args)
 
     assert not (outdir / "manifest.tsv").exists()
     assert not (outdir / "provenance").exists()
+    assert (outdir / "sra").exists()
+
+    assert run_download(args) == 0
+    assert archive.load_archive_metadata(outdir)["origin"] == "native"
+
+
+def test_download_refuses_unclassified_destination_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("placeholder\n", encoding="utf-8")
+    outdir = tmp_path / "output"
+    outdir.mkdir()
+    (outdir / "unexpected.txt").write_text("occupied\n", encoding="utf-8")
+
+    args = build_parser().parse_args([
+        "download",
+        str(manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    assert run_download(args) == 2
+    assert not (outdir / "logs").exists()
+    assert not (outdir / "sra").exists()
+    assert not (outdir / "tmp").exists()
 
 
 def test_legacy_fastq_download_continues_after_legacy_bootstrap(

@@ -528,6 +528,134 @@ def test_status_is_invalid_for_attestation_missing_required_field(tmp_path: Path
     assert status_project(tmp_path)["state"] == "INVALID"
 
 
+def test_status_uses_latest_completed_at_even_when_filename_order_disagrees(tmp_path: Path) -> None:
+    archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
+    archive.write_archive_metadata(tmp_path, archive_metadata)
+    write_manifest([make_record()], tmp_path / "manifest.tsv")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+
+    admissions = [
+        archive.create_admission_record(
+            str(archive_metadata["archive_id"]),
+            {
+                "accession": "SRR1",
+                "admission_method": "existing",
+                "initial_partial_size": 0,
+                "expected_size_bytes": 5,
+                "expected_md5": "5d41402abc4b2a76b9719d911017c592",
+                "observed_size_bytes": 5,
+                "observed_md5": "5d41402abc4b2a76b9719d911017c592",
+                "observed_sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+            },
+            relative_path="sra/SRR1",
+            application_version="0.3.0",
+        )
+    ]
+    archive.replace_admission_records(tmp_path, admissions)
+
+    control_fingerprint = archive.control_fingerprint(
+        verification_module._current_control_state(tmp_path, archive_metadata, admissions)
+    )
+    quick_payload_fingerprint = archive.quick_payload_fingerprint(
+        verification_module._quick_payload_entries(tmp_path)
+    )
+
+    validations_dir = tmp_path / "provenance" / "validations"
+    validations_dir.mkdir(parents=True, exist_ok=True)
+    (validations_dir / "20260809T193000000000Z-ffffffff.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "validation_policy_version": 1,
+                "application": "ncbi-bioproject-archiver",
+                "application_version": "0.3.0",
+                "mode": "standard",
+                "started_at": "2026-08-09T19:30:00.050000Z",
+                "completed_at": "2026-08-09T19:30:00.100000Z",
+                "archive_id": str(archive_metadata["archive_id"]),
+                "bioproject": "PRJNA000001",
+                "control_fingerprint": control_fingerprint,
+                "quick_payload_fingerprint": quick_payload_fingerprint,
+                "result": "pass",
+                "runs_checked": 1,
+                "per_run": [],
+                "failures": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (validations_dir / "20260809T193000000000Z-00000000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "validation_policy_version": 1,
+                "application": "ncbi-bioproject-archiver",
+                "application_version": "0.3.0",
+                "mode": "standard",
+                "started_at": "2026-08-09T19:30:00.850000Z",
+                "completed_at": "2026-08-09T19:30:00.900000Z",
+                "archive_id": str(archive_metadata["archive_id"]),
+                "bioproject": "PRJNA000001",
+                "control_fingerprint": control_fingerprint,
+                "quick_payload_fingerprint": quick_payload_fingerprint,
+                "result": "fail",
+                "runs_checked": 1,
+                "per_run": [],
+                "failures": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert status_project(tmp_path)["state"] == "FAILED"
+
+
+def test_status_is_invalid_if_any_historical_attestation_is_malformed(tmp_path: Path) -> None:
+    archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
+    archive.write_archive_metadata(tmp_path, archive_metadata)
+    write_manifest([make_record()], tmp_path / "manifest.tsv")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+    assert verify_project(tmp_path) == 0
+
+    validations_dir = tmp_path / "provenance" / "validations"
+    (validations_dir / "20000101T000000000000Z-badbeef0.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "validation_policy_version": 1,
+                "application": "ncbi-bioproject-archiver",
+                "application_version": "0.3.0",
+                "mode": "standard",
+                "started_at": "2000-01-01T00:00:00.000000Z",
+                "completed_at": "2000-01-01T00:00:00.100000Z",
+                "archive_id": str(archive_metadata["archive_id"]),
+                "bioproject": "PRJNA000001",
+                "quick_payload_fingerprint": "0" * 64,
+                "result": "pass",
+                "runs_checked": 1,
+                "per_run": [],
+                "failures": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert status_project(tmp_path)["state"] == "INVALID"
+
+
 def test_status_is_invalid_for_acquisition_record_missing_integrity_field(tmp_path: Path) -> None:
     archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
     archive.write_archive_metadata(tmp_path, archive_metadata)

@@ -131,4 +131,4 @@ def test_publish_provenance_bundle_uses_timestamp_uuid_attestation_names(tmp_pat
 
     validations = list((tmp_path / "provenance" / "validations").iterdir())
     assert len(validations) == 1
-    assert re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}\.json", validations[0].name)
+    assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}\.json", validations[0].name)

@@ -299,6 +299,13 @@ def run_download(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     managed_archive, legacy_destination, new_destination = archive_module.classify_destination(outdir)
+    if not managed_archive and not legacy_destination and not new_destination:
+        print(
+            "Destination state is ambiguous (not managed, legacy, or new); "
+            "refusing to mutate it.",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.dry_run:
         records, input_format = load_records(args.input, args.input_format)

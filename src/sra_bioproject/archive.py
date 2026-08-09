@@ -40,7 +40,7 @@ def _utc_now() -> str:
 
 
 def _utc_filename_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def _canonical_json_bytes(payload: object) -> bytes:
@@ -129,6 +129,14 @@ def admission_records_path(project_dir: Path) -> Path:
     return provenance_directory(project_dir) / "acquisitions.jsonl"
 
 
+def _is_benign_scaffold_entry(entry: Path) -> bool:
+    if entry.name in {"logs", "tmp"}:
+        return entry.is_dir()
+    if entry.name in {"sra", "fastq", "metadata", "provenance"}:
+        return entry.is_dir() and not any(entry.iterdir())
+    return False
+
+
 def classify_destination(project_dir: Path) -> tuple[bool, bool, bool]:
     managed = archive_metadata_path(project_dir).is_file()
     if managed:
@@ -145,7 +153,7 @@ def classify_destination(project_dir: Path) -> tuple[bool, bool, bool]:
     )
     if legacy:
         return False, True, False
-    entries = [child for child in project_dir.iterdir() if child.name not in {"logs", "tmp"}]
+    entries = [child for child in project_dir.iterdir() if not _is_benign_scaffold_entry(child)]
     return False, False, not entries
 
 

@@ -20,7 +20,7 @@ from .validation import describe_file_integrity, run_accession_path
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _atomic_json_write(path: Path, payload: dict[str, object]) -> Path:
@@ -179,12 +179,33 @@ def _load_attestations(project_dir: Path) -> list[dict[str, object]]:
     if not validations_dir.exists():
         return []
     payloads: list[dict[str, object]] = []
-    for path in sorted(validations_dir.glob("*.json")):
+    for path in validations_dir.glob("*.json"):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError(f"Attestation must be a JSON object: {path}")
+        payload["_source_file"] = path.name
         payloads.append(payload)
     return payloads
+
+
+def _parse_iso_timestamp(value: object, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Attestation {field_name} must be a non-empty string")
+    raw = value.strip()
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Attestation {field_name} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"Attestation {field_name} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _attestation_sort_key(payload: dict[str, object]) -> tuple[datetime, str]:
+    completed_at = _parse_iso_timestamp(payload.get("completed_at"), "completed_at")
+    source_file = str(payload.get("_source_file", ""))
+    return completed_at, source_file
 
 
 def _validate_attestation(
@@ -222,8 +243,7 @@ def _validate_attestation(
     if payload["mode"] not in {"standard", "deep"}:
         raise ValueError("Attestation mode must be standard or deep")
     for key in ("started_at", "completed_at"):
-        if not isinstance(payload[key], str) or not payload[key].strip():
-            raise ValueError(f"Attestation {key} must be a non-empty string")
+        _parse_iso_timestamp(payload[key], key)
     if str(payload["archive_id"]) != archive_id:
         raise ValueError("Attestation archive_id does not match archive.json")
     if str(payload["bioproject"]) != bioproject:
@@ -259,7 +279,7 @@ def _validate_managed_identity(
 
 
 def _write_attestation(project_dir: Path, payload: dict[str, object]) -> None:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     _atomic_json_write(_validations_dir(project_dir) / f"{stamp}-{uuid.uuid4().hex[:8]}.json", payload)
 
 
@@ -291,11 +311,15 @@ def status_project(project_dir: Path) -> dict[str, object]:
         return {"state": "UNVERIFIED", "bioproject": archive_metadata["bioproject"]}
 
     try:
-        attestation = _validate_attestation(
-            attestations[-1],
-            archive_id=str(archive_metadata["archive_id"]),
-            bioproject=str(archive_metadata["bioproject"]),
-        )
+        validated_attestations = [
+            _validate_attestation(
+                payload,
+                archive_id=str(archive_metadata["archive_id"]),
+                bioproject=str(archive_metadata["bioproject"]),
+            )
+            for payload in attestations
+        ]
+        attestation = max(validated_attestations, key=_attestation_sort_key)
     except Exception as exc:
         return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
 
