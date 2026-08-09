@@ -242,6 +242,15 @@ def _resolve_download_bioproject(outdir: Path, explicit_bioproject: str | None) 
 
 def _append_native_admission(outdir: Path, archive_id: str, record, result) -> None:
     admissions = archive_module.load_admission_records(outdir)
+    if result.admission_method == "existing":
+        for item in admissions:
+            if (
+                item.get("accession") == record.run_accession
+                and item.get("relative_path") == f"sra/{record.run_accession}"
+                and item.get("observed_sha256") == result.observed_sha256
+                and item.get("admission_method") == "existing"
+            ):
+                return
     payload = archive_module.create_admission_record(
         archive_id,
         {
@@ -259,6 +268,25 @@ def _append_native_admission(outdir: Path, archive_id: str, record, result) -> N
     )
     admissions.append(payload)
     archive_module.replace_admission_records(outdir, admissions)
+
+
+def _is_recognizable_legacy_destination(outdir: Path) -> bool:
+    return (
+        (outdir / "manifest.tsv").is_file()
+        or (outdir / "metadata" / "snapshot.json").is_file()
+        or ((outdir / "sra").exists() and any((outdir / "sra").iterdir()))
+        or ((outdir / "fastq").exists() and any((outdir / "fastq").iterdir()))
+    )
+
+
+def _is_native_new_destination(outdir: Path) -> bool:
+    if archive_module.archive_metadata_path(outdir).is_file():
+        return False
+    if _is_recognizable_legacy_destination(outdir):
+        return False
+    if not outdir.exists():
+        return True
+    return not any(outdir.iterdir())
 
 
 def run_download(args: argparse.Namespace) -> int:
@@ -279,7 +307,9 @@ def run_download(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    new_destination = not outdir.exists()
+    managed_archive = archive_module.archive_metadata_path(outdir).is_file()
+    legacy_destination = (not managed_archive) and _is_recognizable_legacy_destination(outdir)
+    new_destination = _is_native_new_destination(outdir)
 
     if args.dry_run:
         records, input_format = load_records(args.input, args.input_format)
@@ -305,6 +335,7 @@ def run_download(args: argparse.Namespace) -> int:
 
     records, input_format = load_records(args.input, args.input_format)
     manifest_path = outdir / "manifest.tsv"
+    previous_manifest = manifest_path.read_bytes() if legacy_destination and manifest_path.is_file() else None
     write_manifest(records, manifest_path)
     if new_destination:
         archive_module.write_archive_metadata(
@@ -315,7 +346,7 @@ def run_download(args: argparse.Namespace) -> int:
                 application_version=__version__,
             ),
         )
-    archive_id = str(archive_module.load_archive_metadata(outdir)["archive_id"])
+    archive_id = None if legacy_destination else str(archive_module.load_archive_metadata(outdir)["archive_id"])
     total_sra = sum(record.sra_size_bytes for record in records)
     total_bases = sum(record.total_bases for record in records)
     logging.info("Input: %s", args.input)
@@ -357,9 +388,18 @@ def run_download(args: argparse.Namespace) -> int:
         curl_path,
         args.jobs,
         args.batch_attempts,
-        on_success=lambda record, result: _append_native_admission(outdir, archive_id, record, result),
+        on_success=(
+            None
+            if legacy_destination
+            else lambda record, result: _append_native_admission(outdir, archive_id, record, result)
+        ),
     )
     if failures:
+        if legacy_destination:
+            if previous_manifest is None and manifest_path.exists():
+                manifest_path.unlink()
+            elif previous_manifest is not None:
+                manifest_path.write_bytes(previous_manifest)
         logging.error(
             "%d run(s) still failed after %d pass(es). See %s",
             len(failures),
@@ -368,6 +408,15 @@ def run_download(args: argparse.Namespace) -> int:
         )
         return 1
     logging.info("All %d required SRA files downloaded and MD5 verified", len(records_to_download))
+
+    if legacy_destination:
+        verification_exit = verify_project(outdir, bioproject=bioproject)
+        if verification_exit != 0:
+            if previous_manifest is None and manifest_path.exists():
+                manifest_path.unlink()
+            elif previous_manifest is not None:
+                manifest_path.write_bytes(previous_manifest)
+        return verification_exit
 
     if args.mode == "sra":
         return 0

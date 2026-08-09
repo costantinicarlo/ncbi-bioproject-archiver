@@ -267,6 +267,40 @@ def replace_admission_records(project_dir: Path, records: list[dict[str, object]
     return _atomic_replace(path, _canonical_jsonl_bytes(validated_records))
 
 
+def publish_provenance_bundle(
+    project_dir: Path,
+    archive_metadata: dict[str, object],
+    admissions: list[dict[str, object]],
+    attestations: list[dict[str, object]],
+) -> Path:
+    target = provenance_directory(project_dir)
+    if target.exists():
+        raise FileExistsError(target)
+    validated_archive = _validate_archive_metadata(dict(archive_metadata))
+    validated_admissions = [_validate_admission_record(dict(record)) for record in admissions]
+    staging = project_dir / f".provenance.staging.{uuid.uuid4().hex[:8]}"
+    try:
+        _atomic_replace(staging / "archive.json", _canonical_json_bytes(validated_archive))
+        _atomic_replace(staging / "acquisitions.jsonl", _canonical_jsonl_bytes(validated_admissions))
+        for index, attestation in enumerate(attestations, start=1):
+            _atomic_replace(
+                staging / "validations" / f"{index:04d}.json",
+                _canonical_json_bytes(attestation),
+            )
+        os.replace(staging, target)
+        _fsync_directory(project_dir)
+    finally:
+        if staging.exists():
+            for child in sorted(staging.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    child.rmdir()
+            if staging.exists():
+                staging.rmdir()
+    return target
+
+
 def load_admission_records(project_dir: Path) -> list[dict[str, object]]:
     path = admission_records_path(project_dir)
     if not path.exists():

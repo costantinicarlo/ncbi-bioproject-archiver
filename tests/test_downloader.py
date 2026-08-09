@@ -7,6 +7,7 @@ import pytest
 from sra_bioproject import archive
 from sra_bioproject.cli import build_parser, run_download
 from sra_bioproject.downloader import DownloadResult, download_batch, download_one
+from sra_bioproject.manifest import write_manifest
 from sra_bioproject.models import RunRecord
 
 
@@ -346,3 +347,146 @@ def test_download_initializes_native_provenance_and_records_admission(
     assert admissions[0]["admitted_by_application"] == archive.APPLICATION_NAME
     assert admissions[0]["expected_md5"] == "5d41402abc4b2a76b9719d911017c592"
     assert (outdir / "manifest.tsv").is_file()
+
+
+def test_download_treats_precreated_empty_directory_as_new_native_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("placeholder\n", encoding="utf-8")
+    outdir = tmp_path / "output"
+    outdir.mkdir()
+    args = build_parser().parse_args([
+        "download",
+        str(manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.load_records", lambda path, input_format: ([make_record("SRR1")], "tsv"))
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    def fake_download_batch(records, sra_dir, logs_dir, curl_path, jobs, batch_attempts, *, download=None, sleep=None, on_success=None):
+        result = DownloadResult(
+            path=sra_dir / "SRR1",
+            admission_method="downloaded_fresh",
+            initial_partial_size=0,
+            observed_size_bytes=5,
+            observed_md5="5d41402abc4b2a76b9719d911017c592",
+            observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+        if on_success is not None:
+            on_success(records[0], result)
+        return []
+
+    monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+
+    assert run_download(args) == 0
+    assert archive.load_archive_metadata(outdir)["origin"] == "native"
+
+
+def test_download_does_not_append_duplicate_existing_admission_on_rerun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("placeholder\n", encoding="utf-8")
+    outdir = tmp_path / "output"
+    args = build_parser().parse_args([
+        "download",
+        str(manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.load_records", lambda path, input_format: ([make_record("SRR1")], "tsv"))
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    def fake_download_batch(records, sra_dir, logs_dir, curl_path, jobs, batch_attempts, *, download=None, sleep=None, on_success=None):
+        result = DownloadResult(
+            path=sra_dir / "SRR1",
+            admission_method="existing",
+            initial_partial_size=0,
+            observed_size_bytes=5,
+            observed_md5="5d41402abc4b2a76b9719d911017c592",
+            observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+        if on_success is not None:
+            on_success(records[0], result)
+        return []
+
+    monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+
+    assert run_download(args) == 0
+    assert run_download(args) == 0
+    admissions = archive.load_admission_records(outdir)
+    assert len(admissions) == 1
+    assert admissions[0]["admission_method"] == "existing"
+
+
+def test_legacy_download_bootstraps_archive_after_complete_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outdir = tmp_path / "output"
+    outdir.mkdir()
+    write_manifest([make_record("SRR1")], outdir / "manifest.tsv")
+    sra_dir = outdir / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+    input_manifest = tmp_path / "input.tsv"
+    input_manifest.write_text("placeholder\n", encoding="utf-8")
+    args = build_parser().parse_args([
+        "download",
+        str(input_manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.load_records", lambda path, input_format: ([make_record("SRR1")], "tsv"))
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    def fake_download_batch(records, sra_dir, logs_dir, curl_path, jobs, batch_attempts, *, download=None, sleep=None, on_success=None):
+        return []
+
+    monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+
+    assert run_download(args) == 0
+    assert archive.load_archive_metadata(outdir)["origin"] == "legacy"
+
+
+def test_failing_legacy_download_leaves_archive_unmanaged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outdir = tmp_path / "output"
+    outdir.mkdir()
+    write_manifest([make_record("SRR1")], outdir / "manifest.tsv")
+    input_manifest = tmp_path / "input.tsv"
+    input_manifest.write_text("placeholder\n", encoding="utf-8")
+    args = build_parser().parse_args([
+        "download",
+        str(input_manifest),
+        "--outdir",
+        str(outdir),
+        "--bioproject",
+        "PRJNA000001",
+    ])
+
+    monkeypatch.setattr("sra_bioproject.cli.load_records", lambda path, input_format: ([make_record("SRR1")], "tsv"))
+    monkeypatch.setattr("sra_bioproject.cli.check_command", lambda name, required=True: name)
+
+    def fake_download_batch(records, sra_dir, logs_dir, curl_path, jobs, batch_attempts, *, download=None, sleep=None, on_success=None):
+        return [records[0]]
+
+    monkeypatch.setattr("sra_bioproject.cli.download_batch", fake_download_batch)
+
+    assert run_download(args) == 1
+    assert not (outdir / "provenance").exists()

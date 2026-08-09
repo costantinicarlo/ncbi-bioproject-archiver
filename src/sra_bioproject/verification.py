@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import uuid
 
 from . import __version__
 from . import archive as archive_module
+from .downloader import check_command
 from .manifest import read_manifest
 from .metadata.normalize import sha256sum
 from .metadata.validation import validate_project
@@ -44,15 +46,18 @@ def _snapshot_path(project_dir: Path) -> Path:
     return project_dir / "metadata" / "snapshot.json"
 
 
+
+
 def _validations_dir(project_dir: Path) -> Path:
     return archive_module.provenance_directory(project_dir) / "validations"
 
 
 def _recognizable_legacy(project_dir: Path) -> bool:
+    sra_has_entries = (project_dir / "sra").exists() and any((project_dir / "sra").glob("*"))
     return (
         _manifest_path(project_dir).is_file()
         or _snapshot_path(project_dir).is_file()
-        or any((project_dir / "sra").glob("*")) if (project_dir / "sra").exists() else False
+        or sra_has_entries
     )
 
 
@@ -94,9 +99,43 @@ def _current_control_state(
         "snapshot": {
             "exists": snapshot_path.is_file(),
             "sha256": sha256sum(snapshot_path) if snapshot_path.is_file() else None,
+            "tracked_files": _snapshot_tracked_files_state(project_dir),
         },
         "admissions": admissions,
     }
+
+
+def _snapshot_tracked_files_state(project_dir: Path) -> list[dict[str, object]]:
+    snapshot_path = _snapshot_path(project_dir)
+    if not snapshot_path.is_file():
+        return []
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("snapshot.json must be a JSON object")
+    tracked: list[dict[str, object]] = []
+    for group in ("raw_files", "derived_files"):
+        items = payload.get(group, [])
+        if not isinstance(items, list):
+            raise ValueError(f"snapshot {group} must be a list")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError(f"snapshot {group} must contain objects")
+            path_value = item.get("path")
+            if not isinstance(path_value, str) or not path_value:
+                raise ValueError(f"snapshot {group} contains invalid path")
+            base = project_dir if path_value == "manifest.tsv" else project_dir / "metadata"
+            path = base / path_value
+            exists = path.is_file()
+            tracked.append(
+                {
+                    "group": group,
+                    "path": path_value,
+                    "exists": exists,
+                    "size_bytes": path.stat().st_size if exists else None,
+                    "sha256": sha256sum(path) if exists else None,
+                }
+            )
+    return tracked
 
 
 def _quick_payload_entries(project_dir: Path) -> list[dict[str, object]]:
@@ -125,9 +164,23 @@ def _load_attestations(project_dir: Path) -> list[dict[str, object]]:
     return payloads
 
 
+def _validate_managed_identity(
+    archive_metadata: dict[str, object],
+    admissions: list[dict[str, object]],
+) -> None:
+    expected_archive_id = str(archive_metadata["archive_id"])
+    for admission in admissions:
+        if str(admission.get("archive_id")) != expected_archive_id:
+            raise ValueError("acquisitions.jsonl contains archive_id values that do not match archive.json")
+
+
 def _write_attestation(project_dir: Path, payload: dict[str, object]) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     _atomic_json_write(_validations_dir(project_dir) / f"{stamp}-{uuid.uuid4().hex[:8]}.json", payload)
+
+
+def _run_vdb_validate(sra_path: Path, executable: str) -> None:
+    subprocess.run([executable, str(sra_path)], check=True)
 
 
 def status_project(project_dir: Path) -> dict[str, object]:
@@ -138,10 +191,14 @@ def status_project(project_dir: Path) -> dict[str, object]:
     try:
         archive_metadata = archive_module.load_archive_metadata(project_dir)
         admissions = archive_module.load_admission_records(project_dir)
+        _validate_managed_identity(archive_metadata, admissions)
     except Exception as exc:
         return {"state": "INVALID", "reason": str(exc)}
 
-    attestations = _load_attestations(project_dir)
+    try:
+        attestations = _load_attestations(project_dir)
+    except Exception as exc:
+        return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
     if not attestations:
         return {"state": "UNVERIFIED", "bioproject": archive_metadata["bioproject"]}
 
@@ -167,24 +224,36 @@ def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bo
     archive_path = archive_module.archive_metadata_path(project_dir)
     managed = archive_path.exists()
     snapshot_bioproject = _snapshot_bioproject(project_dir)
+    explicit_bioproject = archive_module.validate_bioproject(bioproject) if bioproject is not None else None
 
     if managed:
         archive_metadata = archive_module.load_archive_metadata(project_dir)
         resolved_bioproject = str(archive_metadata["bioproject"])
+        if explicit_bioproject is not None and explicit_bioproject != resolved_bioproject:
+            return 2
+        if snapshot_bioproject is not None and snapshot_bioproject != resolved_bioproject:
+            return 2
     else:
         if not _recognizable_legacy(project_dir):
             return 2
-        if bioproject is not None:
-            resolved_bioproject = archive_module.validate_bioproject(bioproject)
+        if explicit_bioproject is not None:
+            resolved_bioproject = explicit_bioproject
         elif snapshot_bioproject is not None:
             resolved_bioproject = snapshot_bioproject
         else:
+            return 2
+        if snapshot_bioproject is not None and snapshot_bioproject != resolved_bioproject:
             return 2
         archive_metadata = None
 
     manifest_path = _manifest_path(project_dir)
     if not manifest_path.is_file():
         return 2
+    vdb_validate = None
+    if deep:
+        vdb_validate = check_command("vdb-validate", required=False)
+        if vdb_validate is None:
+            return 2
     records = read_manifest(manifest_path)
     if _snapshot_path(project_dir).is_file() and validate_project(project_dir):
         if managed:
@@ -221,6 +290,7 @@ def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bo
     pending: list[dict[str, object]] = []
     per_run: list[dict[str, object]] = []
     failures: list[str] = []
+    verified_integrities: dict[str, object] = {}
     for record in records:
         path = run_accession_path(project_dir / "sra", record.run_accession)
         result = {
@@ -246,6 +316,16 @@ def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bo
             failures.append(f"{record.run_accession}: MD5 mismatch")
             per_run.append(result)
             continue
+        verified_integrities[record.run_accession] = integrity
+        if deep and vdb_validate is not None:
+            try:
+                _run_vdb_validate(path, vdb_validate)
+            except subprocess.CalledProcessError:
+                result["result"] = "fail"
+                result["reason"] = "vdb-validate failed"
+                failures.append(f"{record.run_accession}: vdb-validate failed")
+                per_run.append(result)
+                continue
         previous = prior_by_accession.get(record.run_accession)
         if previous is None:
             baseline = "baseline_established"
@@ -347,39 +427,41 @@ def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bo
                 "initial_partial_size": 0,
                 "expected_size_bytes": record.sra_size_bytes,
                 "expected_md5": record.md5,
-                "observed_size_bytes": describe_file_integrity(run_accession_path(project_dir / "sra", record.run_accession)).size_bytes,
-                "observed_md5": describe_file_integrity(run_accession_path(project_dir / "sra", record.run_accession)).md5,
-                "observed_sha256": describe_file_integrity(run_accession_path(project_dir / "sra", record.run_accession)).sha256,
+                "observed_size_bytes": verified_integrities[record.run_accession].size_bytes,
+                "observed_md5": verified_integrities[record.run_accession].md5,
+                "observed_sha256": verified_integrities[record.run_accession].sha256,
             },
             relative_path=f"sra/{record.run_accession}",
             application_version=__version__,
         )
         for record in records
     ]
-    archive_module.write_archive_metadata(project_dir, legacy_archive_metadata)
-    archive_module.replace_admission_records(project_dir, legacy_admissions)
     control_fingerprint = archive_module.control_fingerprint(
         _current_control_state(project_dir, legacy_archive_metadata, legacy_admissions)
     )
     quick_fingerprint = archive_module.quick_payload_fingerprint(_quick_payload_entries(project_dir))
-    _write_attestation(
+    archive_module.publish_provenance_bundle(
         project_dir,
-        {
-            "schema_version": archive_module.ATTESTATION_SCHEMA_VERSION,
-            "validation_policy_version": archive_module.VALIDATION_POLICY_VERSION,
-            "application": archive_module.APPLICATION_NAME,
-            "application_version": __version__,
-            "mode": "deep" if deep else "standard",
-            "started_at": _now(),
-            "completed_at": _now(),
-            "archive_id": legacy_archive_id,
-            "bioproject": resolved_bioproject,
-            "control_fingerprint": control_fingerprint,
-            "quick_payload_fingerprint": quick_fingerprint,
-            "result": "pass",
-            "runs_checked": len(records),
-            "per_run": per_run,
-            "failures": [],
-        },
+        legacy_archive_metadata,
+        legacy_admissions,
+        [
+            {
+                "schema_version": archive_module.ATTESTATION_SCHEMA_VERSION,
+                "validation_policy_version": archive_module.VALIDATION_POLICY_VERSION,
+                "application": archive_module.APPLICATION_NAME,
+                "application_version": __version__,
+                "mode": "deep" if deep else "standard",
+                "started_at": _now(),
+                "completed_at": _now(),
+                "archive_id": legacy_archive_id,
+                "bioproject": resolved_bioproject,
+                "control_fingerprint": control_fingerprint,
+                "quick_payload_fingerprint": quick_fingerprint,
+                "result": "pass",
+                "runs_checked": len(records),
+                "per_run": per_run,
+                "failures": [],
+            }
+        ],
     )
     return 0
