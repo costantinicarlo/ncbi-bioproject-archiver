@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from sra_bioproject import archive
 from sra_bioproject.metadata import snapshot as snapshot_module
 from sra_bioproject.metadata.models import RawResponseRecord
 from sra_bioproject.metadata.snapshot import create_snapshot
@@ -34,6 +35,10 @@ def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Pat
     assert snapshot.is_file()
     assert not partial
     assert validate_project(tmp_path) == []
+    archive_metadata = archive.load_archive_metadata(tmp_path)
+    assert archive_metadata["bioproject"] == "PRJNA000001"
+    assert archive_metadata["origin"] == "native"
+    assert json.loads(snapshot.read_text(encoding="utf-8"))["application"] == "ncbi-bioproject-archiver"
     assert "secret" not in snapshot.read_text(encoding="utf-8")
     assert '"retrieved_at"' in (tmp_path / "metadata" / "derived" / "project.json").read_text()
 
@@ -44,6 +49,34 @@ def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Pat
     archives = list((tmp_path / "metadata" / "archive").iterdir())
     assert len(archives) == 1
     assert (archives[0] / "snapshot.json").is_file()
+
+
+def test_snapshot_initialization_failure_restores_clean_new_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+
+    def fail_archive_write(*args, **kwargs):
+        raise OSError("forced archive metadata failure")
+
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.archive_module.write_archive_metadata", fail_archive_write)
+    with pytest.raises(OSError, match="forced archive metadata failure"):
+        create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+
+    assert not (tmp_path / "metadata").exists()
+    assert not (tmp_path / "manifest.tsv").exists()
+    assert not (tmp_path / "provenance").exists()
+
+
+def test_refresh_preserves_existing_archive_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    baseline_archive_id = archive.load_archive_metadata(tmp_path)["archive_id"]
+
+    create_snapshot("PRJNA000001", tmp_path, refresh=True, write_download_manifest=True)
+
+    assert archive.load_archive_metadata(tmp_path)["archive_id"] == baseline_archive_id
 
 
 def test_refresh_is_transactional_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

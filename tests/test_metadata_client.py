@@ -1,6 +1,8 @@
 from email.message import Message
 from urllib.error import HTTPError
 
+import pytest
+
 from sra_bioproject.metadata.client import HttpResponse, MetadataClient
 
 
@@ -19,6 +21,14 @@ def test_client_adds_identity_and_redacts_api_key() -> None:
     assert "email=researcher%40example.org" in response.url
     assert "tool=test-tool" in response.url
     assert "secret" not in client.public_url(response.url)
+
+
+def test_client_defaults_to_canonical_tool_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NCBI_TOOL", raising=False)
+
+    client = MetadataClient(monotonic=lambda: 1.0)
+
+    assert client.tool == "ncbi-bioproject"
 
 
 def test_client_retries_429_and_server_errors() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
@@ -12,9 +13,19 @@ import time
 from typing import Callable, Iterable
 
 from .models import RunRecord
-from .validation import run_accession_path, verify_download
+from .validation import describe_file_integrity, run_accession_path, verify_download
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    path: Path
+    admission_method: str
+    initial_partial_size: int
+    observed_size_bytes: int
+    observed_md5: str
+    observed_sha256: str
 
 
 def human_bytes(byte_count: int) -> str:
@@ -41,13 +52,22 @@ def download_one(
     *,
     run_command: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
     timestamp: Callable[[], float] = time.time,
-) -> Path:
+) -> DownloadResult:
     final_path = run_accession_path(sra_dir, record.run_accession)
     part_path = run_accession_path(sra_dir, record.run_accession, ".part")
+    initial_partial_size = 0
 
     if verify_download(final_path, record):
         LOGGER.info("%s: already present and verified", record.run_accession)
-        return final_path
+        integrity = describe_file_integrity(final_path)
+        return DownloadResult(
+            path=final_path,
+            admission_method="existing",
+            initial_partial_size=0,
+            observed_size_bytes=integrity.size_bytes,
+            observed_md5=integrity.md5,
+            observed_sha256=integrity.sha256,
+        )
 
     if final_path.exists():
         bad_path = final_path.with_name(f"{final_path.name}.bad.{int(timestamp())}")
@@ -56,17 +76,28 @@ def download_one(
 
     if part_path.exists():
         part_size = part_path.stat().st_size
+        initial_partial_size = part_size
         if part_size > record.sra_size_bytes:
             LOGGER.warning("%s: partial file is oversized; restarting", record.run_accession)
             part_path.unlink()
+            initial_partial_size = 0
         elif part_size == record.sra_size_bytes:
             if verify_download(part_path, record):
+                integrity = describe_file_integrity(part_path)
                 os.replace(part_path, final_path)
                 LOGGER.info("%s: resumed from complete partial file after verification", record.run_accession)
-                return final_path
+                return DownloadResult(
+                    path=final_path,
+                    admission_method="promoted_partial",
+                    initial_partial_size=part_size,
+                    observed_size_bytes=integrity.size_bytes,
+                    observed_md5=integrity.md5,
+                    observed_sha256=integrity.sha256,
+                )
             bad_path = part_path.with_name(f"{part_path.name}.bad.{int(timestamp())}")
             part_path.rename(bad_path)
             LOGGER.warning("%s: exact-size partial failed validation; quarantined to %s", record.run_accession, bad_path)
+            initial_partial_size = 0
 
     LOGGER.info(
         "%s: downloading %s (%s)",
@@ -104,9 +135,17 @@ def download_one(
             f"{record.run_accession}: downloaded file failed size/MD5 validation"
         )
 
+    integrity = describe_file_integrity(part_path)
     os.replace(part_path, final_path)
     LOGGER.info("%s: download complete and MD5 verified", record.run_accession)
-    return final_path
+    return DownloadResult(
+        path=final_path,
+        admission_method="resumed_download" if initial_partial_size else "downloaded_fresh",
+        initial_partial_size=initial_partial_size,
+        observed_size_bytes=integrity.size_bytes,
+        observed_md5=integrity.md5,
+        observed_sha256=integrity.sha256,
+    )
 
 
 def download_batch(
@@ -117,8 +156,9 @@ def download_batch(
     jobs: int,
     batch_attempts: int,
     *,
-    download: Callable[[RunRecord, Path, str], Path] = download_one,
+    download: Callable[[RunRecord, Path, str], DownloadResult] = download_one,
     sleep: Callable[[float], None] = time.sleep,
+    on_success: Callable[[RunRecord, DownloadResult], None] | None = None,
 ) -> list[RunRecord]:
     remaining = sorted(records, key=lambda record: record.run_accession)
     failed_path = logs_dir / "failed_accessions.txt"
@@ -141,7 +181,9 @@ def download_batch(
             for future in concurrent.futures.as_completed(futures):
                 record = futures[future]
                 try:
-                    future.result()
+                    result = future.result()
+                    if on_success is not None:
+                        on_success(record, result)
                 except Exception:
                     LOGGER.exception(
                         "%s: download failed on pass %d; continuing with other runs",

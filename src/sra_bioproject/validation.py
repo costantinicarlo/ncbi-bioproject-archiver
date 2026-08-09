@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
@@ -14,12 +15,31 @@ RUN_ACCESSION_RE = re.compile(r"^(SRR|ERR|DRR)\d+$")
 MD5_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def md5sum(path: Path, block_size: int = 16 * 1024 * 1024) -> str:
-    digest = hashlib.md5()
+@dataclass(frozen=True)
+class FileIntegrity:
+    size_bytes: int
+    md5: str
+    sha256: str
+
+
+def describe_file_integrity(path: Path, block_size: int = 16 * 1024 * 1024) -> FileIntegrity:
+    md5_digest = hashlib.md5()
+    sha256_digest = hashlib.sha256()
+    size_bytes = 0
     with path.open("rb") as file_handle:
         while chunk := file_handle.read(block_size):
-            digest.update(chunk)
-    return digest.hexdigest()
+            size_bytes += len(chunk)
+            md5_digest.update(chunk)
+            sha256_digest.update(chunk)
+    return FileIntegrity(
+        size_bytes=size_bytes,
+        md5=md5_digest.hexdigest(),
+        sha256=sha256_digest.hexdigest(),
+    )
+
+
+def md5sum(path: Path, block_size: int = 16 * 1024 * 1024) -> str:
+    return describe_file_integrity(path, block_size).md5
 
 
 def validate_run_accession(accession: str) -> str:
@@ -58,9 +78,10 @@ def verify_download(path: Path, record: RunRecord) -> bool:
         return False
     if not MD5_RE.fullmatch(record.md5.lower()):
         return False
-    if path.stat().st_size != record.sra_size_bytes:
+    integrity = describe_file_integrity(path)
+    if integrity.size_bytes != record.sra_size_bytes:
         return False
-    if md5sum(path) != record.md5.lower():
+    if integrity.md5 != record.md5.lower():
         return False
     return True
 
