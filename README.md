@@ -12,11 +12,13 @@ The canonical product identity is `ncbi-bioproject-archiver`. The canonical CLI 
 
 `SRA Normalized` is NCBI's full normalized SRA object produced by the primary ETL workflow. The tool requires `semantic_name="SRA Normalized"` and `supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced quality representation is not lossless.
 
-## Tutorial
+## Guides
+
+See [Quickstart](docs/quickstart.md) for the shortest command sequence from accession to verified archive.
 
 See [From a Paper to a Reusable Local BioProject Dataset](docs/tutorial-publication-to-local-bioproject.md)
-for an end-to-end workflow covering accession discovery, metadata inspection,
-storage planning, verified SRA downloads and optional FASTQ conversion.
+for the longer handbook chapter covering accession discovery, metadata inspection,
+storage planning, verified SRA downloads, lifecycle verification, and optional FASTQ conversion.
 
 ## Installation
 

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+If you are starting a new archive rather than recovering a failed one, begin with [quickstart.md](quickstart.md) for the minimal operational workflow or [tutorial-publication-to-local-bioproject.md](tutorial-publication-to-local-bioproject.md) for the longer explanatory guide.
+
 ## Destination Problems
 
 List mounted macOS volumes and check the requested spelling:

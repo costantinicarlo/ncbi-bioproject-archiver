@@ -9,6 +9,8 @@
 - Added deep verification through required `vdb-validate`, atomic all-or-nothing legacy bootstrap, fail-closed destination classification, and restart-safe failed initialization.
 - Recorded separate acquisition and admission provenance, policy-versioned attestations, and combined MD5/SHA-256 integrity traversal for authoritative SRA payloads.
 - Rejected `--delete-sra-after-fastq` under the v0.3 archival contract because authoritative SRA payloads must remain present.
+- Renamed the citation and third-party release metadata to match the new `ncbi-bioproject-archiver` product identity and packaged the repository README as the project long description.
+- Expanded CI to Python 3.9-3.13 and added release-artifact smoke tests for the wheel, canonical CLI, compatibility CLI, and `python -m sra_bioproject` entry point.
 
 ## 0.2.1
 
