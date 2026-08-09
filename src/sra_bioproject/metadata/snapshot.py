@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import sys
 from typing import Sequence
+import uuid
 
 from .. import __version__
 from .client import MetadataClient
@@ -38,12 +39,34 @@ def _archive(metadata_dir: Path) -> None:
             shutil.move(str(child), destination / child.name)
 
 
-def _archive_previous_state(outdir: Path, previous_metadata_dir: Path, stamp: str) -> None:
-    archive_destination = outdir / "metadata" / "archive" / stamp
+def _archive_previous_state(
+    outdir: Path,
+    previous_metadata_dir: Path,
+    stamp: str,
+    previous_manifest: Path | None = None,
+) -> None:
+    archive_root = outdir / "metadata" / "archive"
+    archive_destination = archive_root / stamp
     archive_destination.mkdir(parents=True, exist_ok=True)
     for child in list(previous_metadata_dir.iterdir()):
+        if child.name == "archive":
+            archive_root.mkdir(parents=True, exist_ok=True)
+            for archived_entry in list(child.iterdir()):
+                destination = archive_root / archived_entry.name
+                if destination.exists():
+                    destination = archive_root / f"{stamp}-{archived_entry.name}"
+                shutil.move(str(archived_entry), destination)
+            child.rmdir()
+            continue
         shutil.move(str(child), archive_destination / child.name)
+    if previous_manifest is not None and previous_manifest.exists():
+        shutil.move(str(previous_manifest), archive_destination / "manifest.tsv")
     previous_metadata_dir.rmdir()
+
+
+def _unique_stamp() -> str:
+    base = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{base}-{uuid.uuid4().hex[:8]}"
 
 
 def _safe_command(command: Sequence[str]) -> list[str]:
@@ -63,7 +86,17 @@ def _safe_command(command: Sequence[str]) -> list[str]:
     return sanitized
 
 
-def _build_snapshot(accession: str, metadata_dir: Path, outdir: Path, *, client: MetadataClient | None = None, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
+def _build_snapshot(
+    accession: str,
+    metadata_dir: Path,
+    outdir: Path,
+    *,
+    client: MetadataClient | None = None,
+    include_literature_search: bool = False,
+    write_download_manifest: bool = False,
+    sra_xml: Path | None = None,
+    command: Sequence[str] = (),
+) -> tuple[Path, bool]:
     raw_dir = metadata_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     started = _now()
@@ -108,48 +141,81 @@ def _build_snapshot(accession: str, metadata_dir: Path, outdir: Path, *, client:
 
 def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | None = None, refresh: bool = False, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
     metadata_dir = outdir / "metadata"
+    outdir.mkdir(parents=True, exist_ok=True)
     has_snapshot = (metadata_dir / "snapshot.json").exists()
     if has_snapshot and not refresh:
         raise FileExistsError(f"Metadata snapshot already exists at {metadata_dir}; use --refresh")
 
-    if refresh and metadata_dir.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        staging_dir = outdir / f".metadata.staging.{stamp}"
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        snapshot_path: Path | None = None
-        partial = False
+    stamp = _unique_stamp()
+    staging_root = outdir / f".snapshot.staging.{stamp}"
+    staging_metadata = staging_root / "metadata"
+    staging_manifest = staging_root / "manifest.tsv"
+    shutil.rmtree(staging_root, ignore_errors=True)
+
+    try:
+        _, partial = _build_snapshot(
+            accession,
+            staging_metadata,
+            staging_root,
+            client=client,
+            include_literature_search=include_literature_search,
+            write_download_manifest=write_download_manifest,
+            sra_xml=sra_xml,
+            command=command,
+        )
+
+        previous_metadata = outdir / f".metadata.previous.{stamp}"
+        previous_manifest = outdir / f".manifest.previous.{stamp}"
+        manifest_path = outdir / "manifest.tsv"
+        backed_up_metadata = False
+        backed_up_manifest = False
+        swapped_metadata = False
+        swapped_manifest = False
+
         try:
-            snapshot_path, partial = _build_snapshot(
-                accession,
-                staging_dir,
-                outdir,
-                client=client,
-                include_literature_search=include_literature_search,
-                write_download_manifest=write_download_manifest,
-                sra_xml=sra_xml,
-                command=command,
-            )
-            previous_dir = outdir / f".metadata.previous.{stamp}"
-            if previous_dir.exists():
-                shutil.rmtree(previous_dir)
-            os.replace(metadata_dir, previous_dir)
-            os.replace(staging_dir, metadata_dir)
-            _archive_previous_state(outdir, previous_dir, stamp)
+            if metadata_dir.exists():
+                os.replace(metadata_dir, previous_metadata)
+                backed_up_metadata = True
+            if write_download_manifest and manifest_path.exists():
+                os.replace(manifest_path, previous_manifest)
+                backed_up_manifest = True
+
+            os.replace(staging_metadata, metadata_dir)
+            swapped_metadata = True
+
+            if write_download_manifest:
+                if not staging_manifest.exists():
+                    raise RuntimeError("Staged manifest missing before publish")
+                os.replace(staging_manifest, manifest_path)
+                swapped_manifest = True
+
+            if backed_up_metadata:
+                _archive_previous_state(
+                    outdir,
+                    previous_metadata,
+                    stamp,
+                    previous_manifest if backed_up_manifest else None,
+                )
+            elif backed_up_manifest and previous_manifest.exists():
+                previous_manifest.unlink()
             return metadata_dir / "snapshot.json", partial
         except Exception:
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            if swapped_manifest and manifest_path.exists():
+                manifest_path.unlink()
+            if swapped_metadata and metadata_dir.exists():
+                shutil.rmtree(metadata_dir, ignore_errors=True)
+            if backed_up_metadata and previous_metadata.exists():
+                os.replace(previous_metadata, metadata_dir)
+            if backed_up_manifest and previous_manifest.exists():
+                os.replace(previous_manifest, manifest_path)
             raise
-
-    return _build_snapshot(
-        accession,
-        metadata_dir,
-        outdir,
-        client=client,
-        include_literature_search=include_literature_search,
-        write_download_manifest=write_download_manifest,
-        sra_xml=sra_xml,
-        command=command,
-    )
+        finally:
+            if previous_metadata.exists():
+                shutil.rmtree(previous_metadata, ignore_errors=True)
+            if previous_manifest.exists():
+                previous_manifest.unlink()
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def normalize_existing(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[str, dict[str, object]]:
