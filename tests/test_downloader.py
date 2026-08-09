@@ -53,6 +53,19 @@ def test_resumes_part_file(tmp_path: Path) -> None:
     assert (tmp_path / "SRR1").read_bytes() == b"hello"
 
 
+def test_promotes_exact_size_partial_after_md5_verification(tmp_path: Path) -> None:
+    record = make_record("SRR1")
+    (tmp_path / "SRR1.part").write_bytes(b"hello")
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("curl must not run when exact-size partial is already valid")
+
+    result = download_one(record, tmp_path, "curl", run_command=should_not_run)
+    assert result == tmp_path / "SRR1"
+    assert (tmp_path / "SRR1").read_bytes() == b"hello"
+    assert not (tmp_path / "SRR1.part").exists()
+
+
 def test_quarantines_invalid_completed_file(tmp_path: Path) -> None:
     record = make_record("SRR1")
     (tmp_path / "SRR1").write_bytes(b"wrong")
@@ -113,6 +126,13 @@ def test_writes_persistent_failures(tmp_path: Path) -> None:
     assert [record.run_accession for record in failures] == ["SRR1"]
     assert calls == Counter({"SRR1": 3, "SRR2": 1})
     assert (tmp_path / "logs" / "failed_accessions.txt").read_text() == "SRR1\n"
+
+
+def test_rejects_unsafe_accession_paths(tmp_path: Path) -> None:
+    record = make_record("SRR1")
+    object.__setattr__(record, "run_accession", "../../escape")
+    with pytest.raises(ValueError, match="Invalid run accession"):
+        download_one(record, tmp_path, "curl")
 
 
 @pytest.mark.parametrize("option", ["--jobs", "--threads", "--batch-attempts"])

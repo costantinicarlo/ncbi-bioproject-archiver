@@ -67,6 +67,36 @@ def test_rejects_missing_http_url(tmp_path: Path) -> None:
         parse_xml(modified_xml(tmp_path, remove_http))
 
 
+def test_rejects_invalid_run_accession(tmp_path: Path) -> None:
+    def corrupt(root: ET.Element) -> None:
+        run = root.find("./EXPERIMENT_PACKAGE/RUN_SET/RUN")
+        assert run is not None
+        run.set("accession", "../../escape")
+
+    with pytest.raises(ValueError, match="Invalid run accession"):
+        parse_xml(modified_xml(tmp_path, corrupt))
+
+
+def test_rejects_invalid_md5(tmp_path: Path) -> None:
+    def corrupt(root: ET.Element) -> None:
+        sra_file = root.find("./EXPERIMENT_PACKAGE/RUN_SET/RUN/SRAFiles/SRAFile[@semantic_name='SRA Normalized']")
+        assert sra_file is not None
+        sra_file.set("md5", "not-md5")
+
+    with pytest.raises(ValueError, match="32 hexadecimal"):
+        parse_xml(modified_xml(tmp_path, corrupt))
+
+
+def test_rejects_non_positive_sra_size(tmp_path: Path) -> None:
+    def corrupt(root: ET.Element) -> None:
+        sra_file = root.find("./EXPERIMENT_PACKAGE/RUN_SET/RUN/SRAFiles/SRAFile[@semantic_name='SRA Normalized']")
+        assert sra_file is not None
+        sra_file.set("size", "0")
+
+    with pytest.raises(ValueError, match="must be positive"):
+        parse_xml(modified_xml(tmp_path, corrupt))
+
+
 @pytest.mark.parametrize("field", ["total_bases", "total_spots"])
 def test_rejects_malformed_run_numbers(tmp_path: Path, field: str) -> None:
     def corrupt(root: ET.Element) -> None:

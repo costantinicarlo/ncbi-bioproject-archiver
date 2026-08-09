@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -44,6 +45,22 @@ def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Pat
     assert (archives[0] / "snapshot.json").is_file()
 
 
+def test_refresh_is_transactional_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    baseline_snapshot = (tmp_path / "metadata" / "snapshot.json").read_bytes()
+
+    def fail_retrieve(*args, **kwargs):
+        raise RuntimeError("transient failure")
+
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", fail_retrieve)
+    with pytest.raises(RuntimeError, match="transient failure"):
+        create_snapshot("PRJNA000001", tmp_path, refresh=True, write_download_manifest=True)
+
+    assert (tmp_path / "metadata" / "snapshot.json").read_bytes() == baseline_snapshot
+    assert not list(tmp_path.glob(".metadata.staging.*"))
+
+
 @pytest.mark.parametrize("relative_path", ["raw/bioproject.xml", "derived/runs.tsv"])
 def test_validation_detects_corruption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str) -> None:
     monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
@@ -51,3 +68,11 @@ def test_validation_detects_corruption(tmp_path: Path, monkeypatch: pytest.Monke
     path = tmp_path / "metadata" / relative_path
     path.write_bytes(path.read_bytes() + b"corrupt")
     assert any("SHA-256 mismatch" in error for error in validate_project(tmp_path))
+
+
+def test_validation_rejects_empty_snapshot_object(tmp_path: Path) -> None:
+    metadata_dir = tmp_path / "metadata"
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "snapshot.json").write_text(json.dumps({}), encoding="utf-8")
+    errors = validate_project(tmp_path)
+    assert any("missing required keys" in error for error in errors)

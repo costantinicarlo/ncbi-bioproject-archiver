@@ -39,3 +39,21 @@ def test_client_retries_429_and_server_errors() -> None:
     assert client.entrez("einfo.fcgi", db="bioproject").content == b"ok"
     assert len(attempts) == 3
     assert delays == [1, 2]
+
+
+def test_entrez_uses_post_for_large_efetch_requests() -> None:
+    captured = {}
+
+    def transport(request, timeout):
+        captured["url"] = request.full_url
+        captured["data"] = request.data
+        return HttpResponse(b"ok", 200, "text/plain", request.full_url)
+
+    ids = ",".join(str(i) for i in range(1, 205))
+    client = MetadataClient(transport=transport, monotonic=lambda: 1.0)
+    response = client.entrez("efetch.fcgi", db="sra", id=ids, retmode="xml")
+
+    assert response.content == b"ok"
+    assert captured["url"].endswith("/efetch.fcgi")
+    assert captured["data"] is not None
+    assert b"id=1%2C2%2C3" in captured["data"]
