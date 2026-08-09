@@ -58,7 +58,7 @@ class MetadataClient:
         if self._last_request and delay > 0:
             self.sleep(delay)
 
-    def get(self, base_url: str, params: Mapping[str, object]) -> HttpResponse:
+    def _request(self, base_url: str, params: Mapping[str, object], *, use_post: bool = False) -> HttpResponse:
         query = {key: str(value) for key, value in params.items() if value not in (None, "")}
         if "eutils.ncbi.nlm.nih.gov" in base_url:
             query.update({"tool": self.tool})
@@ -66,8 +66,14 @@ class MetadataClient:
                 query["email"] = self.email
             if self.api_key:
                 query["api_key"] = self.api_key
-        url = f"{base_url}?{urlencode(query)}"
-        request = Request(url, headers={"User-Agent": f"{self.tool}/metadata"})
+        headers = {"User-Agent": f"{self.tool}/metadata"}
+        if use_post:
+            payload = urlencode(query).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            request = Request(base_url, data=payload, headers=headers)
+        else:
+            url = f"{base_url}?{urlencode(query)}"
+            request = Request(url, headers=headers)
         for attempt in range(1, self.attempts + 1):
             self._throttle()
             try:
@@ -87,8 +93,20 @@ class MetadataClient:
             self.sleep(delay)
         raise RuntimeError("metadata request retry loop exhausted")
 
+    def get(self, base_url: str, params: Mapping[str, object]) -> HttpResponse:
+        return self._request(base_url, params, use_post=False)
+
+    def post(self, base_url: str, params: Mapping[str, object]) -> HttpResponse:
+        return self._request(base_url, params, use_post=True)
+
     def entrez(self, endpoint: str, **params: object) -> HttpResponse:
-        return self.get(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/{endpoint}", params)
+        base_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/{endpoint}"
+        if endpoint == "efetch.fcgi":
+            id_value = str(params.get("id", ""))
+            id_count = len([item for item in id_value.split(",") if item.strip()])
+            if id_count >= 200:
+                return self.post(base_url, params)
+        return self.get(base_url, params)
 
     def europe_pmc(self, accession: str) -> HttpResponse:
         return self.get(

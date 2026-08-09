@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 import platform
 from pathlib import Path
 import shutil
@@ -37,6 +38,14 @@ def _archive(metadata_dir: Path) -> None:
             shutil.move(str(child), destination / child.name)
 
 
+def _archive_previous_state(outdir: Path, previous_metadata_dir: Path, stamp: str) -> None:
+    archive_destination = outdir / "metadata" / "archive" / stamp
+    archive_destination.mkdir(parents=True, exist_ok=True)
+    for child in list(previous_metadata_dir.iterdir()):
+        shutil.move(str(child), archive_destination / child.name)
+    previous_metadata_dir.rmdir()
+
+
 def _safe_command(command: Sequence[str]) -> list[str]:
     sanitized = []
     hide_next = False
@@ -54,12 +63,7 @@ def _safe_command(command: Sequence[str]) -> list[str]:
     return sanitized
 
 
-def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | None = None, refresh: bool = False, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
-    metadata_dir = outdir / "metadata"
-    if (metadata_dir / "snapshot.json").exists():
-        if not refresh:
-            raise FileExistsError(f"Metadata snapshot already exists at {metadata_dir}; use --refresh")
-        _archive(metadata_dir)
+def _build_snapshot(accession: str, metadata_dir: Path, outdir: Path, *, client: MetadataClient | None = None, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
     raw_dir = metadata_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     started = _now()
@@ -102,5 +106,58 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
     return metadata_dir / "snapshot.json", bool(warnings)
 
 
+def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | None = None, refresh: bool = False, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
+    metadata_dir = outdir / "metadata"
+    has_snapshot = (metadata_dir / "snapshot.json").exists()
+    if has_snapshot and not refresh:
+        raise FileExistsError(f"Metadata snapshot already exists at {metadata_dir}; use --refresh")
+
+    if refresh and metadata_dir.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        staging_dir = outdir / f".metadata.staging.{stamp}"
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        snapshot_path: Path | None = None
+        partial = False
+        try:
+            snapshot_path, partial = _build_snapshot(
+                accession,
+                staging_dir,
+                outdir,
+                client=client,
+                include_literature_search=include_literature_search,
+                write_download_manifest=write_download_manifest,
+                sra_xml=sra_xml,
+                command=command,
+            )
+            previous_dir = outdir / f".metadata.previous.{stamp}"
+            if previous_dir.exists():
+                shutil.rmtree(previous_dir)
+            os.replace(metadata_dir, previous_dir)
+            os.replace(staging_dir, metadata_dir)
+            _archive_previous_state(outdir, previous_dir, stamp)
+            return metadata_dir / "snapshot.json", partial
+        except Exception:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+
+    return _build_snapshot(
+        accession,
+        metadata_dir,
+        outdir,
+        client=client,
+        include_literature_search=include_literature_search,
+        write_download_manifest=write_download_manifest,
+        sra_xml=sra_xml,
+        command=command,
+    )
+
+
 def normalize_existing(metadata_dir: Path, manifest_path: Path | None = None) -> tuple[str, dict[str, object]]:
-    return normalize(metadata_dir, manifest_path)
+    retrieved_at = ""
+    snapshot_path = metadata_dir / "snapshot.json"
+    if snapshot_path.is_file():
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        value = snapshot.get("retrieved_at")
+        if isinstance(value, str):
+            retrieved_at = value
+    return normalize(metadata_dir, manifest_path, retrieved_at)
