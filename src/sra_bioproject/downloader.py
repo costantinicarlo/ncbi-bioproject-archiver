@@ -182,8 +182,6 @@ def download_batch(
                 record = futures[future]
                 try:
                     result = future.result()
-                    if on_success is not None:
-                        on_success(record, result)
                 except Exception:
                     LOGGER.exception(
                         "%s: download failed on pass %d; continuing with other runs",
@@ -191,6 +189,12 @@ def download_batch(
                         batch_attempt,
                     )
                     failed_this_pass.append(record)
+                    continue
+                try:
+                    if on_success is not None:
+                        on_success(record, result)
+                except Exception:
+                    raise
 
         remaining = sorted(failed_this_pass, key=lambda record: record.run_accession)
         if remaining and batch_attempt < batch_attempts:

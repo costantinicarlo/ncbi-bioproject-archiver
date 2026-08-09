@@ -12,7 +12,7 @@ import sys
 
 from . import __version__
 from . import archive as archive_module
-from .downloader import check_command, download_batch, human_bytes
+from .downloader import DownloadResult, check_command, download_batch, human_bytes
 from .fastq import convert_one, fastq_complete, validate_vdb
 from .manifest import read_manifest, write_manifest
 from .metadata.client import MetadataClient
@@ -286,7 +286,10 @@ def _is_native_new_destination(outdir: Path) -> bool:
         return False
     if not outdir.exists():
         return True
-    return not any(outdir.iterdir())
+    if not outdir.is_dir():
+        return False
+    entries = [child for child in outdir.iterdir() if child.name not in {"logs", "tmp"}]
+    return not entries
 
 
 def run_download(args: argparse.Namespace) -> int:
@@ -381,6 +384,13 @@ def run_download(args: argparse.Namespace) -> int:
             if not fastq_complete(record.run_accession, fastq_dir, gzip_path)
         ]
 
+    admission_results: dict[str, DownloadResult] = {}
+
+    def handle_download_success(record, result: DownloadResult) -> None:
+        admission_results[record.run_accession] = result
+        if not legacy_destination:
+            _append_native_admission(outdir, archive_id, record, result)
+
     failures = download_batch(
         records_to_download,
         sra_dir,
@@ -388,11 +398,7 @@ def run_download(args: argparse.Namespace) -> int:
         curl_path,
         args.jobs,
         args.batch_attempts,
-        on_success=(
-            None
-            if legacy_destination
-            else lambda record, result: _append_native_admission(outdir, archive_id, record, result)
-        ),
+        on_success=handle_download_success,
     )
     if failures:
         if legacy_destination:
@@ -410,7 +416,11 @@ def run_download(args: argparse.Namespace) -> int:
     logging.info("All %d required SRA files downloaded and MD5 verified", len(records_to_download))
 
     if legacy_destination:
-        verification_exit = verify_project(outdir, bioproject=bioproject)
+        verification_exit = verify_project(
+            outdir,
+            bioproject=bioproject,
+            admission_provenance=admission_results,
+        )
         if verification_exit != 0:
             if previous_manifest is None and manifest_path.exists():
                 manifest_path.unlink()

@@ -12,7 +12,7 @@ import uuid
 
 from . import __version__
 from . import archive as archive_module
-from .downloader import check_command
+from .downloader import DownloadResult, check_command
 from .manifest import read_manifest
 from .metadata.normalize import sha256sum
 from .metadata.validation import validate_project
@@ -105,6 +105,17 @@ def _current_control_state(
     }
 
 
+def _snapshot_tracked_path(project_dir: Path, path_value: str) -> Path:
+    base = project_dir if path_value == "manifest.tsv" else project_dir / "metadata"
+    candidate = (base / path_value).resolve(strict=False)
+    base_resolved = base.resolve(strict=False)
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ValueError(f"snapshot tracked path escapes archive root: {path_value}") from exc
+    return candidate
+
+
 def _snapshot_tracked_files_state(project_dir: Path) -> list[dict[str, object]]:
     snapshot_path = _snapshot_path(project_dir)
     if not snapshot_path.is_file():
@@ -123,8 +134,7 @@ def _snapshot_tracked_files_state(project_dir: Path) -> list[dict[str, object]]:
             path_value = item.get("path")
             if not isinstance(path_value, str) or not path_value:
                 raise ValueError(f"snapshot {group} contains invalid path")
-            base = project_dir if path_value == "manifest.tsv" else project_dir / "metadata"
-            path = base / path_value
+            path = _snapshot_tracked_path(project_dir, path_value)
             exists = path.is_file()
             tracked.append(
                 {
@@ -259,6 +269,10 @@ def status_project(project_dir: Path) -> dict[str, object]:
         return {"state": "INVALID", "reason": str(exc)}
 
     try:
+        _current_control_state(project_dir, archive_metadata, admissions)
+    except Exception as exc:
+        return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
+    try:
         attestations = _load_attestations(project_dir)
     except Exception as exc:
         return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
@@ -294,7 +308,13 @@ def status_project(project_dir: Path) -> dict[str, object]:
     return {"state": "INVALID", "bioproject": archive_metadata["bioproject"]}
 
 
-def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bool = False) -> int:
+def verify_project(
+    project_dir: Path,
+    *,
+    bioproject: str | None = None,
+    deep: bool = False,
+    admission_provenance: dict[str, DownloadResult] | None = None,
+) -> int:
     archive_path = archive_module.archive_metadata_path(project_dir)
     managed = archive_path.exists()
     snapshot_bioproject = _snapshot_bioproject(project_dir)
@@ -492,24 +512,40 @@ def verify_project(project_dir: Path, *, bioproject: str | None = None, deep: bo
         application_version=__version__,
     )
     legacy_archive_id = str(legacy_archive_metadata["archive_id"])
-    legacy_admissions = [
-        archive_module.create_admission_record(
-            legacy_archive_id,
-            {
-                "accession": record.run_accession,
-                "admission_method": "legacy_observation",
-                "initial_partial_size": 0,
-                "expected_size_bytes": record.sra_size_bytes,
-                "expected_md5": record.md5,
-                "observed_size_bytes": verified_integrities[record.run_accession].size_bytes,
-                "observed_md5": verified_integrities[record.run_accession].md5,
-                "observed_sha256": verified_integrities[record.run_accession].sha256,
-            },
-            relative_path=f"sra/{record.run_accession}",
-            application_version=__version__,
+    legacy_admissions = []
+    for record in records:
+        provenance_result = None
+        if admission_provenance is not None:
+            provenance_result = admission_provenance.get(record.run_accession)
+        if provenance_result is None:
+            admission_method = "legacy_observation"
+            observed_size_bytes = verified_integrities[record.run_accession].size_bytes
+            observed_md5 = verified_integrities[record.run_accession].md5
+            observed_sha256 = verified_integrities[record.run_accession].sha256
+            initial_partial_size = 0
+        else:
+            admission_method = provenance_result.admission_method
+            observed_size_bytes = provenance_result.observed_size_bytes
+            observed_md5 = provenance_result.observed_md5
+            observed_sha256 = provenance_result.observed_sha256
+            initial_partial_size = provenance_result.initial_partial_size
+        legacy_admissions.append(
+            archive_module.create_admission_record(
+                legacy_archive_id,
+                {
+                    "accession": record.run_accession,
+                    "admission_method": admission_method,
+                    "initial_partial_size": initial_partial_size,
+                    "expected_size_bytes": record.sra_size_bytes,
+                    "expected_md5": record.md5,
+                    "observed_size_bytes": observed_size_bytes,
+                    "observed_md5": observed_md5,
+                    "observed_sha256": observed_sha256,
+                },
+                relative_path=f"sra/{record.run_accession}",
+                application_version=__version__,
+            )
         )
-        for record in records
-    ]
     control_fingerprint = archive_module.control_fingerprint(
         _current_control_state(project_dir, legacy_archive_metadata, legacy_admissions)
     )

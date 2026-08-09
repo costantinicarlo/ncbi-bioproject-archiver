@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from sra_bioproject import archive
-from sra_bioproject.cli import build_parser, run_download
+from sra_bioproject.cli import _is_native_new_destination, build_parser, run_download
 from sra_bioproject.downloader import DownloadResult, download_batch, download_one
 from sra_bioproject.manifest import write_manifest
 from sra_bioproject.models import RunRecord
@@ -171,6 +171,40 @@ def test_download_batch_reports_successes_to_coordinator(tmp_path: Path) -> None
         ("SRR1", "downloaded_fresh"),
         ("SRR2", "downloaded_fresh"),
     ]
+
+
+def test_download_batch_surfaces_coordinator_errors(tmp_path: Path) -> None:
+    records = [make_record("SRR1")]
+
+    def succeed(record, sra_dir, curl_path):
+        return DownloadResult(
+            path=sra_dir / record.run_accession,
+            admission_method="downloaded_fresh",
+            initial_partial_size=0,
+            observed_size_bytes=record.sra_size_bytes,
+            observed_md5=record.md5,
+            observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+
+    with pytest.raises(RuntimeError, match="provenance write failed"):
+        download_batch(
+            records,
+            tmp_path / "sra",
+            tmp_path / "logs",
+            "curl",
+            jobs=1,
+            batch_attempts=1,
+            download=succeed,
+            sleep=lambda seconds: None,
+            on_success=lambda record, result: (_ for _ in ()).throw(RuntimeError("provenance write failed")),
+        )
+
+
+def test_native_new_destination_allows_scaffolding_directories(tmp_path: Path) -> None:
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "tmp").mkdir()
+
+    assert _is_native_new_destination(tmp_path)
 
 
 def test_rejects_unsafe_accession_paths(tmp_path: Path) -> None:
