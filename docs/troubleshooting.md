@@ -85,8 +85,10 @@ ncbi-bioproject metadata-normalize --metadata-dir /data/PRJNA/metadata --manifes
 
 Use `--refresh` to perform a transactional snapshot replacement: new metadata is built in staging and only swapped in after success, then the previous state is archived. Validate checksums and manifest consistency with `ncbi-bioproject validate /data/PRJNA`.
 
-Use `ncbi-bioproject status /data/PRJNA` to check whether the latest passing archive attestation still applies to the current manifest, provenance, and observed payload sentinel. `status` is read-only and may conservatively report `STALE` after timestamp-only changes.
+Use `ncbi-bioproject status /data/PRJNA` to validate the complete historical attestation set and evaluate the latest completed attestation against the current manifest, provenance, and observed payload sentinel. `status` is read-only and may conservatively report `STALE` after timestamp-only changes.
 
 Use `ncbi-bioproject verify /data/PRJNA` to reread authoritative SRA payloads cryptographically. Legacy pre-v0.3 archives remain `LEGACY` until a complete verification succeeds. If any required SRA fails during a legacy bootstrap attempt, no managed provenance is published.
+
+If a destination could be either a native archive or a legacy holding and its identity cannot be determined safely, the command fails closed rather than guessing. Provide an explicit `--bioproject` value on a fresh XML/TSV download, or resolve the destination's metadata and provenance before retrying. Do not delete or partially initialize the directory to force classification.
 
 `--delete-sra-after-fastq` is rejected in v0.3.0 because SRA remains the authoritative archived payload.

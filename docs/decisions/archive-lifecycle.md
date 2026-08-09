@@ -102,7 +102,7 @@ Legacy bootstrap is all-or-nothing.
 
 A recognizable pre-v0.3 archive remains `LEGACY` until the complete authoritative SRA set has been verified read-only.
 
-If any required legacy artifact fails, v0.3.0 publishes no managed provenance, no ledger, and no attestation.
+If any required legacy artifact fails, v0.3.0 publishes no managed provenance, no ledger, and no attestation. Metadata or snapshot operations never bootstrap a recognizable legacy archive. Pre-existing payloads are admitted as `legacy_observation`; fresh, resumed, and promoted material retain their truthful admission method. The SHA-256 baseline committed by bootstrap always comes from the final verification pass.
 
 On complete success, the archive receives immutable archive identity, truthful legacy admission observations, and a first PASS attestation whose control fingerprint already reflects the post-bootstrap state.
 
@@ -124,7 +124,7 @@ It may report:
 
 `FAILED` means the state was interpretable and a current verification attempt found actual integrity failures.
 
-`VERIFIED` means the latest PASS cryptographic attestation still applies to the current policy, control state, and observed payload sentinel.
+`VERIFIED` means the latest completed attestation is a PASS and still applies to the current policy, control state, and observed payload sentinel. The complete historical attestation set must also validate.
 
 ## Quick payload sentinel limitation
 

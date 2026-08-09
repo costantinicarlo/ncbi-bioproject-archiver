@@ -18,7 +18,7 @@ The physical separator is a tab and records are sorted by run accession.
 
 ## Integrity And Recovery
 
-Size catches truncation cheaply; MD5 verifies content. Both are required and validated at ingestion because neither a filename nor a successful process exit proves that the expected object is complete. Curl writes to `<accession>.part`; only a verified part is atomically renamed to the final filename. Exact-size partials are promoted only after verification. Invalid files are retained as `.bad.<timestamp>` for diagnosis.
+Size catches truncation cheaply; MD5 verifies content. Both are required and validated at ingestion because neither a filename nor a successful process exit proves that the expected object is complete. Archive verification calculates MD5 and SHA-256 in one payload traversal, retaining the upstream check and establishing the local baseline without rereading the payload. Curl writes to `<accession>.part`; only a verified part is atomically renamed to the final filename. Exact-size partials are promoted only after verification. Invalid files are retained as `.bad.<timestamp>` for diagnosis.
 
 One run's failure is collected rather than propagated through the executor. Other futures finish, and later passes contain only failed runs. Persistent failures produce `logs/failed_accessions.txt` and a non-zero exit status.
 
@@ -30,6 +30,8 @@ Runtime data (`sra/`, `fastq/`, `tmp/`, logs, partials, and quarantined files) a
 
 Mounted-volume validation is macOS-specific and applies only to paths below `/Volumes`; paths are resolved first, then checked for writability and a real mount-point root. XML/TSV parsing, ordinary paths, curl execution, checksums, retries, and FASTQ workflows are portable to Linux and macOS.
 
+Destination classification fails closed: an ambiguous mixture of managed, legacy, and unexplained content is rejected before runtime directories or provenance are mutated. This preserves restart safety and prevents a download from silently adopting the wrong archive identity.
+
 ## Metadata Architecture
 
 BioProject is the discovery hub, while BioSample carries heterogeneous sample provenance. Entrez ESearch resolves the accession, ESummary preserves the project record, and ELink discovers explicit relationships. The current link definitions are verified through EInfo and include `bioproject_biosample_all`, `bioproject_sra_all`, `bioproject_pubmed`, `bioproject_pmc`, `bioproject_assembly_all`, `bioproject_bioproject_d2u`, and `bioproject_bioproject_u2d`. Large EFetch UID lists are submitted with POST to avoid oversized query strings.
@@ -40,6 +42,8 @@ NCBI project and database links retain curated/database confidence. Europe PMC a
 
 Schema versions are independent constants in `metadata/schemas.py`. Readers should reject unsupported major versions; future compatible columns may increment minor versions. Incompatible changes require a migration path from preserved raw data. Refresh is transactional: retrieval and normalization complete in staging before an atomic swap and archival of the previous metadata state.
 
-Archive lifecycle state is distinct from metadata validation. `validate` remains the metadata-snapshot validator. `verify` performs archive-wide integrity attestation, and `status` reports whether the latest passing attestation still applies to the current control state and observed payload sentinel.
+Archive lifecycle state is distinct from metadata validation. `validate` remains the metadata-snapshot validator. `verify` performs archive-wide integrity attestation, while `status` validates the complete historical attestation set and evaluates the latest completed attestation against the current control state and observed payload sentinel. `status` is read-only and does not reread payload bytes.
+
+Native metadata or snapshot creation establishes immutable archive identity and starts the archive as `UNVERIFIED`. A recognizable pre-v0.3 destination is treated as `LEGACY`: snapshot updates metadata but does not bootstrap managed provenance. Legacy adoption requires complete authoritative SRA verification and publishes identity, admission observations, and the first attestation atomically.
 
 Required BioProject and SRA failures stop the workflow. Optional PubMed, PMC, Assembly, and Europe PMC failures produce a partial snapshot and exit status 4. Every raw and derived artifact is written atomically and recorded with SHA-256 and size in `snapshot.json`.

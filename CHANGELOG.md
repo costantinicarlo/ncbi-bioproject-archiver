@@ -6,6 +6,8 @@
 - Added durable archive identity, append-only admission provenance, structured verification attestations, and lifecycle status reporting for managed BioProject archives.
 - Added archive-wide `verify` and `status` commands, including honest legacy bootstrap, SHA-256 baseline establishment, and conservative staleness detection.
 - Made metadata and snapshot creation initialize native archive identity transactionally without weakening refresh rollback guarantees.
+- Added deep verification through required `vdb-validate`, atomic all-or-nothing legacy bootstrap, fail-closed destination classification, and restart-safe failed initialization.
+- Recorded separate acquisition and admission provenance, policy-versioned attestations, and combined MD5/SHA-256 integrity traversal for authoritative SRA payloads.
 - Rejected `--delete-sra-after-fastq` under the v0.3 archival contract because authoritative SRA payloads must remain present.
 
 ## 0.2.1

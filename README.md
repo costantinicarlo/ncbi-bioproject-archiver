@@ -62,6 +62,8 @@ ncbi-bioproject snapshot PRJNA831841 --outdir /data/PRJNA831841
 
 Successful native metadata and snapshot creation now establish immutable archive identity under `provenance/archive.json`. Managed metadata-only archives are valid but remain `UNVERIFIED` until a later archive-wide verification can attest the authoritative payloads.
 
+The metadata behavior is intentionally asymmetric: a new native destination receives archive identity and becomes `UNVERIFIED`, while a recognizable pre-v0.3 destination receives updated metadata only and remains `LEGACY` until archive verification completes adoption.
+
 Existing snapshots are never overwritten implicitly. Use `--refresh` to rebuild in a staging directory and atomically swap only after a successful refresh; the previous metadata state is then archived under `metadata/archive/<timestamp>/`. Rebuild derived files without network access with:
 
 ```bash
@@ -79,7 +81,7 @@ ncbi-bioproject status /data/PRJNA831841
 ncbi-bioproject verify /data/PRJNA831841
 ```
 
-`status` is read-only and reports whether the latest passing attestation still applies to the current manifest, provenance, and observed payload sentinel. `verify` rereads the authoritative SRA payloads and writes a new attestation.
+`status` is read-only. It validates the complete historical attestation set and evaluates the latest completed attestation against the current manifest, provenance, metadata control state, and observed payload sentinel. `verify` rereads the authoritative SRA payloads and writes a new attestation.
 
 ## Download
 
@@ -128,7 +130,8 @@ The PRJNA831841 worked example may use:
 
 ```bash
 ncbi-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
-  --outdir /Volumes/Bioinfo-1/PRJNA831841 --dry-run
+  --outdir /Volumes/Bioinfo-1/PRJNA831841 --dry-run \
+  --bioproject PRJNA831841
 ```
 
 ## FASTQ Conversion
@@ -151,6 +154,8 @@ Alternatively, add `--mode fastq` to the initial download command to begin conve
 FASTQ conversion can require substantially more temporary and final disk space than the normalized SRA download. Plan for the SRA file, uncompressed staging FASTQ, compression output, and toolkit scratch space to coexist.
 
 ## Output Layout
+
+The layout below is the managed v0.3 form. Recognizable pre-v0.3 legacy directories may lack `provenance/` until successful all-or-nothing adoption.
 
 ```text
 OUTDIR/
