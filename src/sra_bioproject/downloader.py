@@ -12,7 +12,7 @@ import time
 from typing import Callable, Iterable
 
 from .models import RunRecord
-from .validation import verify_download
+from .validation import run_accession_path, verify_download
 
 LOGGER = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ def download_one(
     run_command: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
     timestamp: Callable[[], float] = time.time,
 ) -> Path:
-    final_path = sra_dir / record.run_accession
-    part_path = sra_dir / f"{record.run_accession}.part"
+    final_path = run_accession_path(sra_dir, record.run_accession)
+    part_path = run_accession_path(sra_dir, record.run_accession, ".part")
 
     if verify_download(final_path, record):
         LOGGER.info("%s: already present and verified", record.run_accession)
@@ -54,9 +54,19 @@ def download_one(
         final_path.rename(bad_path)
         LOGGER.warning("%s: moved invalid existing file to %s", record.run_accession, bad_path)
 
-    if part_path.exists() and record.sra_size_bytes and part_path.stat().st_size > record.sra_size_bytes:
-        LOGGER.warning("%s: partial file is oversized; restarting", record.run_accession)
-        part_path.unlink()
+    if part_path.exists():
+        part_size = part_path.stat().st_size
+        if part_size > record.sra_size_bytes:
+            LOGGER.warning("%s: partial file is oversized; restarting", record.run_accession)
+            part_path.unlink()
+        elif part_size == record.sra_size_bytes:
+            if verify_download(part_path, record):
+                os.replace(part_path, final_path)
+                LOGGER.info("%s: resumed from complete partial file after verification", record.run_accession)
+                return final_path
+            bad_path = part_path.with_name(f"{part_path.name}.bad.{int(timestamp())}")
+            part_path.rename(bad_path)
+            LOGGER.warning("%s: exact-size partial failed validation; quarantined to %s", record.run_accession, bad_path)
 
     LOGGER.info(
         "%s: downloading %s (%s)",

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from defusedxml import ElementTree as ET
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 from .models import RunRecord
+from .validation import validate_md5, validate_run_accession
 
 
 def _text(element: ET.Element | None, path: str) -> str:
@@ -15,15 +16,16 @@ def _text(element: ET.Element | None, path: str) -> str:
     return value.strip() if value else ""
 
 
-def _required_integer(value: str | None, accession: str, field: str) -> int:
+def _required_integer(value: str | None, accession: str, field: str, minimum: int = 0) -> int:
     if value is None or not value.strip():
         raise ValueError(f"{accession}: missing required numeric field {field}")
     try:
         parsed = int(value)
     except ValueError as exc:
         raise ValueError(f"{accession}: malformed numeric field {field}: {value!r}") from exc
-    if parsed < 0:
-        raise ValueError(f"{accession}: numeric field {field} must not be negative")
+    if parsed < minimum:
+        comparator = "positive" if minimum == 1 else f">= {minimum}"
+        raise ValueError(f"{accession}: numeric field {field} must be {comparator}")
     return parsed
 
 
@@ -85,6 +87,7 @@ def parse_xml(xml_path: Path | str) -> list[RunRecord]:
             accession = run.get("accession", "").strip()
             if not accession:
                 raise ValueError("A RUN element lacks an accession")
+            accession = validate_run_accession(accession)
 
             normalized = [
                 sra_file
@@ -112,8 +115,8 @@ def parse_xml(xml_path: Path | str) -> list[RunRecord]:
                     instrument_model=_instrument_model(experiment),
                     total_bases=_required_integer(run.get("total_bases"), accession, "total_bases"),
                     total_spots=_required_integer(run.get("total_spots"), accession, "total_spots"),
-                    sra_size_bytes=_required_integer(sra_file.get("size"), accession, "sra_size_bytes"),
-                    md5=sra_file.get("md5", "").strip().lower(),
+                    sra_size_bytes=_required_integer(sra_file.get("size"), accession, "sra_size_bytes", minimum=1),
+                    md5=validate_md5(sra_file.get("md5", ""), accession),
                     url=_http_url(sra_file, accession),
                 )
             )

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import json
 import xml.etree.ElementTree as ET
 
+from defusedxml import ElementTree as DefusedET
+
 from .client import MetadataClient
 from .models import RawResponseRecord
 
@@ -39,7 +41,7 @@ def _raw(filename: str, response, database: str, operation: str, *, query: str =
 
 
 def _ids(content: bytes, linkname: str) -> list[str]:
-    root = ET.fromstring(content)
+    root = DefusedET.fromstring(content)
     return sorted({(element.text or "").strip() for group in root.findall(".//LinkSetDb") if group.findtext("./LinkName") == linkname for element in group.findall("./Link/Id") if (element.text or "").strip()}, key=int)
 
 
@@ -58,7 +60,7 @@ def _discover_links(client: MetadataClient, uid: str) -> bytes:
             "elink.fcgi", dbfrom="bioproject", db=database, id=uid,
             linkname=linkname, cmd="neighbor",
         )
-        root = ET.fromstring(response.content)
+        root = DefusedET.fromstring(response.content)
         for group in root.findall(".//LinkSetDb"):
             link_set.append(group)
     return ET.tostring(combined, encoding="utf-8", xml_declaration=True)

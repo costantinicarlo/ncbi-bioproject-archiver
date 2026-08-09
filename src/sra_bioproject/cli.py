@@ -15,7 +15,7 @@ from .manifest import read_manifest, write_manifest
 from .metadata.client import MetadataClient
 from .metadata.snapshot import create_snapshot, normalize_existing
 from .metadata.validation import validate_project
-from .validation import validate_destination, verify_download
+from .validation import run_accession_path, validate_destination, verify_download
 from .xml_parser import parse_xml
 
 
@@ -205,7 +205,7 @@ def run_download(args: argparse.Namespace) -> int:
     remaining_bytes = sum(
         record.sra_size_bytes
         for record in records
-        if not verify_download(sra_dir / record.run_accession, record)
+        if not verify_download(run_accession_path(sra_dir, record.run_accession), record)
     )
     if usage.free < remaining_bytes:
         logging.warning(
@@ -221,10 +221,12 @@ def run_download(args: argparse.Namespace) -> int:
     assert curl_path is not None
     records_to_download = records
     if args.mode == "fastq" and args.delete_sra_after_fastq:
+        gzip_path = check_command("gzip")
+        assert gzip_path is not None
         records_to_download = [
             record
             for record in records
-            if not (fastq_dir / f".{record.run_accession}.complete").is_file()
+            if not fastq_complete(record.run_accession, fastq_dir, gzip_path)
         ]
 
     failures = download_batch(
@@ -257,7 +259,7 @@ def run_download(args: argparse.Namespace) -> int:
         logging.warning("pigz not found; using single-threaded gzip")
 
     for index, record in enumerate(records, start=1):
-        sra_path = sra_dir / record.run_accession
+        sra_path = run_accession_path(sra_dir, record.run_accession)
         logging.info("FASTQ %d/%d: %s", index, len(records), record.run_accession)
         if fastq_complete(record.run_accession, fastq_dir, gzip_path):
             logging.info("%s: FASTQ output already complete", record.run_accession)

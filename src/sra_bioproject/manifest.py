@@ -8,6 +8,7 @@ import sys
 from typing import Iterable, TextIO
 
 from .models import RunRecord
+from .validation import validate_md5, validate_run_accession
 
 MANIFEST_COLUMNS = (
     "run_accession",
@@ -42,9 +43,13 @@ def _record_from_row(row: dict[str, str], row_number: int) -> RunRecord:
     accession = row.get("run_accession", "").strip()
     if not accession:
         raise ValueError(f"Manifest row {row_number} has no run_accession")
+    accession = validate_run_accession(accession)
     url = row.get("url", "").strip()
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"{accession}: manifest has no usable HTTP(S) URL")
+    sra_size_bytes = _integer(row, "sra_size_bytes", accession)
+    if sra_size_bytes <= 0:
+        raise ValueError(f"{accession}: manifest field sra_size_bytes must be positive")
     return RunRecord(
         run_accession=accession,
         experiment_accession=row.get("experiment_accession", "").strip(),
@@ -57,8 +62,8 @@ def _record_from_row(row: dict[str, str], row_number: int) -> RunRecord:
         instrument_model=row.get("instrument_model", "").strip(),
         total_bases=_integer(row, "total_bases", accession),
         total_spots=_integer(row, "total_spots", accession),
-        sra_size_bytes=_integer(row, "sra_size_bytes", accession),
-        md5=row.get("md5", "").strip().lower(),
+        sra_size_bytes=sra_size_bytes,
+        md5=validate_md5(row.get("md5", ""), accession),
         url=url,
     )
 
