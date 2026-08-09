@@ -50,7 +50,12 @@ jobs:
           python -m venv .venv-smoke
           . .venv-smoke/bin/activate
           pip install dist/*.whl
+          python -c "import importlib.metadata as m; assert m.metadata('ncbi-bioproject-archiver')['Name'] == 'ncbi-bioproject-archiver'"
+          ncbi-bioproject --help
+          ncbi-bioproject manifest --help
+          ncbi-bioproject snapshot --help
+          ncbi-bioproject validate --help
+          ncbi-bioproject verify --help
+          ncbi-bioproject status --help
           sra-bioproject --help
-          sra-bioproject manifest --help
-          sra-bioproject snapshot --help
-          sra-bioproject validate --help
+          python -m sra_bioproject --help

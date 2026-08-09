@@ -10,6 +10,8 @@ The 0.1.0 repository already used the intended `sra_bioproject` package and `sra
 
 The existing SRA XML parser and `RunRecord` remain canonical. `runs.tsv` is the comprehensive metadata table; `manifest.tsv` is its download-focused projection. No duplicate XML parser or manifest implementation was introduced.
 
+Native metadata or snapshot creation establishes immutable archive identity and leaves the archive `UNVERIFIED` until authoritative SRA verification succeeds. A recognizable pre-v0.3 destination is `LEGACY`; snapshot updates its metadata but is not a provenance bootstrap. Legacy adoption belongs to archive verification and is all-or-nothing: the complete authoritative SRA set must pass before managed identity, admission observations, and an initial attestation are published.
+
 ## Schema And Lifecycle
 
 Snapshot, project JSON, metadata TSV, and manifest schemas have independent version constants. Raw responses and normalized outputs are SHA-256 indexed. A pre-existing snapshot is rejected unless `--refresh` is used; refresh is transactional and archives the prior state under `metadata/archive/YYYYMMDDTHHMMSSZ-<8hex>/` only after a successful staged replacement.

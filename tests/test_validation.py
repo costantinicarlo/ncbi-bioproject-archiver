@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from sra_bioproject.models import RunRecord
-from sra_bioproject.validation import md5sum, validate_destination, verify_download
+from sra_bioproject.validation import describe_file_integrity, md5sum, validate_destination, verify_download
 
 
 def record_for(content: bytes) -> RunRecord:
@@ -33,6 +33,24 @@ def test_size_and_md5_verification(tmp_path: Path) -> None:
     assert verify_download(path, record_for(b"hello"))
     path.write_bytes(b"wrong")
     assert not verify_download(path, record_for(b"hello"))
+
+
+def test_describe_file_integrity_reports_size_md5_and_sha256(tmp_path: Path) -> None:
+    path = tmp_path / "SRRTEST"
+    path.write_bytes(b"hello")
+
+    result = describe_file_integrity(path)
+
+    assert result.size_bytes == 5
+    assert result.md5 == "5d41402abc4b2a76b9719d911017c592"
+    assert result.sha256 == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+
+def test_md5sum_reuses_describe_file_integrity(tmp_path: Path) -> None:
+    path = tmp_path / "SRRTEST"
+    path.write_bytes(b"hello")
+
+    assert md5sum(path) == describe_file_integrity(path).md5
 
 
 def test_macos_missing_volume_is_rejected() -> None:

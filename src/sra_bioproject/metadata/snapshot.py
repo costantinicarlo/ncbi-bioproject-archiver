@@ -13,6 +13,7 @@ from typing import Sequence
 import uuid
 
 from .. import __version__
+from .. import archive as archive_module
 from .client import MetadataClient
 from .entrez import retrieve
 from .normalize import atomic_write, normalize, sha256sum
@@ -134,7 +135,7 @@ def _build_snapshot(
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION, "bioproject": actual_accession,
         "retrieved_at": started, "completed_at": _now(), "status": "partial" if warnings else "complete",
-        "application": "sra-bioproject", "application_version": __version__,
+        "application": archive_module.APPLICATION_NAME, "application_version": __version__,
         "python_version": platform.python_version(), "platform": platform.platform(),
         "command": _safe_command(command), "include_literature_search": include_literature_search,
         "sources": sorted({item.database for item in records}), "queries": [{"database": item.database, "operation": item.operation, "query": item.query, "linkname": item.linkname} for item in records],
@@ -148,6 +149,7 @@ def _build_snapshot(
 
 def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | None = None, refresh: bool = False, include_literature_search: bool = False, write_download_manifest: bool = False, sra_xml: Path | None = None, command: Sequence[str] = ()) -> tuple[Path, bool]:
     metadata_dir = outdir / "metadata"
+    archive_path = archive_module.archive_metadata_path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     has_snapshot = (metadata_dir / "snapshot.json").exists()
     if has_snapshot and not refresh:
@@ -182,6 +184,8 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
         backed_up_manifest = False
         swapped_metadata = False
         swapped_manifest = False
+        created_archive_metadata = False
+        _, legacy_destination, _ = archive_module.classify_destination(outdir)
 
         try:
             if metadata_dir.exists():
@@ -200,6 +204,23 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
                 os.replace(staging_manifest, manifest_path)
                 swapped_manifest = True
 
+            if archive_path.is_file():
+                archive_metadata = archive_module.load_archive_metadata(outdir)
+                if str(archive_metadata["bioproject"]) != accession.upper():
+                    raise ValueError(
+                        f"Managed archive identity {archive_metadata['bioproject']} does not match requested {accession.upper()}"
+                    )
+            elif not backed_up_metadata and not legacy_destination:
+                archive_module.write_archive_metadata(
+                    outdir,
+                    archive_module.create_archive_metadata(
+                        accession,
+                        origin="native",
+                        application_version=__version__,
+                    ),
+                )
+                created_archive_metadata = True
+
             if backed_up_metadata:
                 _archive_previous_state(
                     outdir,
@@ -215,6 +236,11 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
                 manifest_path.unlink()
             if swapped_metadata and metadata_dir.exists():
                 shutil.rmtree(metadata_dir, ignore_errors=True)
+            if created_archive_metadata and archive_path.exists():
+                archive_path.unlink()
+                provenance_dir = archive_module.provenance_directory(outdir)
+                if provenance_dir.exists() and not any(provenance_dir.iterdir()):
+                    provenance_dir.rmdir()
             if backed_up_metadata and previous_metadata.exists():
                 os.replace(previous_metadata, metadata_dir)
             if backed_up_manifest and previous_manifest.exists():

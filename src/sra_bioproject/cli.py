@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 
-from .downloader import check_command, download_batch, human_bytes
+from . import __version__
+from . import archive as archive_module
+from .downloader import DownloadResult, check_command, download_batch, human_bytes
 from .fastq import convert_one, fastq_complete, validate_vdb
 from .manifest import read_manifest, write_manifest
 from .metadata.client import MetadataClient
 from .metadata.snapshot import create_snapshot, normalize_existing
 from .metadata.validation import validate_project
 from .validation import run_accession_path, validate_destination, verify_download
+from .verification import status_project, verify_project
 from .xml_parser import parse_xml
 
 
@@ -47,7 +52,7 @@ def configure_logging(log_path: Path, verbose: bool) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="sra-bioproject",
+        prog="ncbi-bioproject",
         description="Download and verify lossless SRA Normalized data.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -74,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=max(1, min(8, os.cpu_count() or 1)),
     )
     download_parser.add_argument("--batch-attempts", type=positive_integer, default=3)
+    download_parser.add_argument("--bioproject", help="NCBI BioProject accession for provenance initialization")
     download_parser.add_argument("--delete-sra-after-fastq", action="store_true")
     download_parser.add_argument("--skip-vdb-validate", action="store_true")
     download_parser.add_argument("--dry-run", action="store_true")
@@ -91,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         metadata_parser.add_argument("--include-literature-search", action="store_true", help="search Europe PMC for accession mentions")
         metadata_parser.add_argument("--sra-xml", type=Path, help="reuse an existing SRA experiment-package XML file")
         metadata_parser.add_argument("--email", default=os.getenv("NCBI_EMAIL", ""), help="NCBI contact email (or NCBI_EMAIL)")
-        metadata_parser.add_argument("--tool", default=os.getenv("NCBI_TOOL", "sra-bioproject"), help="NCBI tool identifier (or NCBI_TOOL)")
+        metadata_parser.add_argument("--tool", default=os.getenv("NCBI_TOOL", "ncbi-bioproject"), help="NCBI tool identifier (or NCBI_TOOL)")
         metadata_parser.add_argument("--api-key", default=os.getenv("NCBI_API_KEY", ""), help=argparse.SUPPRESS)
         metadata_parser.add_argument("--timeout", type=positive_integer, default=60, help="request timeout in seconds")
         metadata_parser.add_argument("--attempts", type=positive_integer, default=4, help="request attempts for transient failures")
@@ -105,6 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser("validate", help="validate a local BioProject snapshot")
     validate_parser.add_argument("project_dir", type=Path)
     validate_parser.set_defaults(handler=run_validate)
+
+    verify_parser = subparsers.add_parser("verify", help="verify a local BioProject archive")
+    verify_parser.add_argument("project_dir", type=Path)
+    verify_parser.add_argument("--bioproject", help="NCBI BioProject accession for legacy bootstrap")
+    verify_parser.add_argument("--deep", action="store_true")
+    verify_parser.set_defaults(handler=run_verify)
+
+    status_parser = subparsers.add_parser("status", help="report archive lifecycle status")
+    status_parser.add_argument("project_dir", type=Path)
+    status_parser.set_defaults(handler=run_status)
     return parser
 
 
@@ -150,6 +166,24 @@ def run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_verify(args: argparse.Namespace) -> int:
+    return verify_project(args.project_dir, bioproject=args.bioproject, deep=args.deep)
+
+
+def run_status(args: argparse.Namespace) -> int:
+    result = status_project(args.project_dir)
+    state = result["state"]
+    bioproject = result.get("bioproject")
+    if bioproject:
+        print(f"BioProject: {bioproject}")
+    print(f"Archive status: {state}")
+    if state == "VERIFIED":
+        return 0
+    if state == "INVALID":
+        return 5
+    return 6
+
+
 def run_manifest(args: argparse.Namespace) -> int:
     if not args.xml.is_file():
         raise FileNotFoundError(args.xml)
@@ -174,11 +208,118 @@ def load_records(path: Path, input_format: str) -> tuple[list, str]:
     return read_manifest(path), selected_format
 
 
+def _snapshot_bioproject(outdir: Path) -> str | None:
+    snapshot_path = outdir / "metadata" / "snapshot.json"
+    if not snapshot_path.is_file():
+        return None
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("snapshot.json must be a JSON object")
+    bioproject = payload.get("bioproject")
+    if not isinstance(bioproject, str) or not bioproject.strip():
+        raise ValueError("snapshot.json bioproject must be a non-empty string")
+    return archive_module.validate_bioproject(bioproject)
+
+
+def _resolve_download_bioproject(outdir: Path, explicit_bioproject: str | None) -> str:
+    candidates: list[str] = []
+    if explicit_bioproject:
+        candidates.append(archive_module.validate_bioproject(explicit_bioproject))
+    archive_path = archive_module.archive_metadata_path(outdir)
+    if archive_path.is_file():
+        candidates.append(str(archive_module.load_archive_metadata(outdir)["bioproject"]))
+    snapshot_bioproject = _snapshot_bioproject(outdir)
+    if snapshot_bioproject is not None:
+        candidates.append(snapshot_bioproject)
+    unique = sorted(set(candidates))
+    if not unique:
+        raise ValueError(
+            "download requires --bioproject when identity cannot be inferred from an existing managed archive or valid snapshot"
+        )
+    if len(unique) != 1:
+        raise ValueError(f"Conflicting BioProject identities for download: {', '.join(unique)}")
+    return unique[0]
+
+
+def _append_native_admission(outdir: Path, archive_id: str, record, result) -> None:
+    admissions = archive_module.load_admission_records(outdir)
+    if result.admission_method == "existing":
+        for item in admissions:
+            if (
+                item.get("accession") == record.run_accession
+                and item.get("relative_path") == f"sra/{record.run_accession}"
+                and item.get("observed_sha256") == result.observed_sha256
+            ):
+                return
+    payload = archive_module.create_admission_record(
+        archive_id,
+        {
+            "accession": record.run_accession,
+            "admission_method": result.admission_method,
+            "initial_partial_size": result.initial_partial_size,
+            "expected_size_bytes": record.sra_size_bytes,
+            "expected_md5": record.md5,
+            "observed_size_bytes": result.observed_size_bytes,
+            "observed_md5": result.observed_md5,
+            "observed_sha256": result.observed_sha256,
+        },
+        relative_path=f"sra/{record.run_accession}",
+        application_version=__version__,
+    )
+    admissions.append(payload)
+    archive_module.replace_admission_records(outdir, admissions)
+
+
+def _is_recognizable_legacy_destination(outdir: Path) -> bool:
+    _, legacy, _ = archive_module.classify_destination(outdir)
+    return legacy
+
+
+def _is_native_new_destination(outdir: Path) -> bool:
+    _, _, new_destination = archive_module.classify_destination(outdir)
+    return new_destination
+
+
 def run_download(args: argparse.Namespace) -> int:
+    if args.delete_sra_after_fastq:
+        print(
+            "--delete-sra-after-fastq is incompatible with the v0.3 archival contract because "
+            "SRA is the authoritative archived payload.",
+            file=sys.stderr,
+        )
+        return 2
+
     if not args.input.is_file():
         raise FileNotFoundError(args.input)
 
     outdir = validate_destination(args.outdir)
+    try:
+        bioproject = _resolve_download_bioproject(outdir, args.bioproject)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    managed_archive, legacy_destination, new_destination = archive_module.classify_destination(outdir)
+    if not managed_archive and not legacy_destination and not new_destination:
+        print(
+            "Destination state is ambiguous (not managed, legacy, or new); "
+            "refusing to mutate it.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.dry_run:
+        records, input_format = load_records(args.input, args.input_format)
+        total_sra = sum(record.sra_size_bytes for record in records)
+        total_bases = sum(record.total_bases for record in records)
+        logging.info("Input: %s", args.input)
+        logging.info("Runs: %d", len(records))
+        logging.info("Total SRA Normalized size: %s", human_bytes(total_sra))
+        logging.info("Total sequenced bases: %.3f Tbp", total_bases / 1e12)
+        logging.info("Input format: %s", input_format)
+        logging.info("BioProject: %s", bioproject)
+        logging.info("Dry run complete; no downloads started")
+        return 0
+
     sra_dir = outdir / "sra"
     fastq_dir = outdir / "fastq"
     tmp_dir = outdir / "tmp"
@@ -190,7 +331,37 @@ def run_download(args: argparse.Namespace) -> int:
 
     records, input_format = load_records(args.input, args.input_format)
     manifest_path = outdir / "manifest.tsv"
-    write_manifest(records, manifest_path)
+    previous_manifest = manifest_path.read_bytes() if legacy_destination and manifest_path.is_file() else None
+    staging_manifest_path = None
+    if new_destination:
+        descriptor, staged_manifest = tempfile.mkstemp(dir=outdir, prefix=".manifest.", suffix=".tsv")
+        os.close(descriptor)
+        staging_manifest_path = Path(staged_manifest)
+        write_manifest(records, staging_manifest_path)
+        try:
+            archive_module.write_archive_metadata(
+                outdir,
+                archive_module.create_archive_metadata(
+                    bioproject,
+                    origin="native",
+                    application_version=__version__,
+                ),
+            )
+            os.replace(staging_manifest_path, manifest_path)
+            staging_manifest_path = None
+        except Exception:
+            if staging_manifest_path is not None and staging_manifest_path.exists():
+                staging_manifest_path.unlink()
+            archive_metadata_path = archive_module.archive_metadata_path(outdir)
+            if archive_metadata_path.exists():
+                archive_metadata_path.unlink()
+                provenance_dir = archive_module.provenance_directory(outdir)
+                if provenance_dir.exists() and not any(provenance_dir.iterdir()):
+                    provenance_dir.rmdir()
+            raise
+    else:
+        write_manifest(records, manifest_path)
+    archive_id = None if legacy_destination else str(archive_module.load_archive_metadata(outdir)["archive_id"])
     total_sra = sum(record.sra_size_bytes for record in records)
     total_bases = sum(record.total_bases for record in records)
     logging.info("Input: %s", args.input)
@@ -213,10 +384,6 @@ def run_download(args: argparse.Namespace) -> int:
             human_bytes(remaining_bytes),
         )
 
-    if args.dry_run:
-        logging.info("Dry run complete; no downloads started")
-        return 0
-
     curl_path = check_command("curl")
     assert curl_path is not None
     records_to_download = records
@@ -229,6 +396,13 @@ def run_download(args: argparse.Namespace) -> int:
             if not fastq_complete(record.run_accession, fastq_dir, gzip_path)
         ]
 
+    admission_results: dict[str, DownloadResult] = {}
+
+    def handle_download_success(record, result: DownloadResult) -> None:
+        admission_results[record.run_accession] = result
+        if not legacy_destination:
+            _append_native_admission(outdir, archive_id, record, result)
+
     failures = download_batch(
         records_to_download,
         sra_dir,
@@ -236,8 +410,14 @@ def run_download(args: argparse.Namespace) -> int:
         curl_path,
         args.jobs,
         args.batch_attempts,
+        on_success=handle_download_success,
     )
     if failures:
+        if legacy_destination:
+            if previous_manifest is None and manifest_path.exists():
+                manifest_path.unlink()
+            elif previous_manifest is not None:
+                manifest_path.write_bytes(previous_manifest)
         logging.error(
             "%d run(s) still failed after %d pass(es). See %s",
             len(failures),
@@ -246,6 +426,22 @@ def run_download(args: argparse.Namespace) -> int:
         )
         return 1
     logging.info("All %d required SRA files downloaded and MD5 verified", len(records_to_download))
+
+    if legacy_destination:
+        verification_exit = verify_project(
+            outdir,
+            bioproject=bioproject,
+            admission_provenance=admission_results,
+        )
+        if verification_exit != 0:
+            if previous_manifest is None and manifest_path.exists():
+                manifest_path.unlink()
+            elif previous_manifest is not None:
+                manifest_path.write_bytes(previous_manifest)
+            return verification_exit
+    else:
+        if args.mode == "sra":
+            return 0
 
     if args.mode == "sra":
         return 0
@@ -299,3 +495,11 @@ def entrypoint() -> None:
     except Exception as exc:
         logging.exception("Fatal error: %s", exc)
         raise SystemExit(1)
+
+
+def legacy_entrypoint() -> None:
+    print(
+        "Warning: 'sra-bioproject' is a legacy command name. Use 'ncbi-bioproject' instead.",
+        file=sys.stderr,
+    )
+    entrypoint()

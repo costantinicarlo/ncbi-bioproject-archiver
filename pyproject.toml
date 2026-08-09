@@ -3,9 +3,10 @@ requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ncbi-sra-bioproject-downloader"
-version = "0.2.1"
+name = "ncbi-bioproject-archiver"
+version = "0.3.0"
 description = "Archive BioProject metadata and download verified lossless SRA data"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -15,7 +16,8 @@ dependencies = ["defusedxml>=0.7.1"]
 dev = ["pytest>=7"]
 
 [project.scripts]
-sra-bioproject = "sra_bioproject.cli:entrypoint"
+ncbi-bioproject = "sra_bioproject.cli:entrypoint"
+sra-bioproject = "sra_bioproject.cli:legacy_entrypoint"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

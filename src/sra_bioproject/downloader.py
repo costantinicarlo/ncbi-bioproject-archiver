@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
@@ -12,9 +13,19 @@ import time
 from typing import Callable, Iterable
 
 from .models import RunRecord
-from .validation import run_accession_path, verify_download
+from .validation import FileIntegrity, MD5_RE, describe_file_integrity, run_accession_path
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    path: Path
+    admission_method: str
+    initial_partial_size: int
+    observed_size_bytes: int
+    observed_md5: str
+    observed_sha256: str
 
 
 def human_bytes(byte_count: int) -> str:
@@ -34,6 +45,20 @@ def check_command(name: str, required: bool = True) -> str | None:
     return path
 
 
+def _verified_integrity(path: Path, record: RunRecord) -> FileIntegrity | None:
+    if not path.is_file() or record.sra_size_bytes <= 0:
+        return None
+    expected_md5 = record.md5.lower()
+    if not MD5_RE.fullmatch(expected_md5):
+        return None
+    integrity = describe_file_integrity(path)
+    if integrity.size_bytes != record.sra_size_bytes:
+        return None
+    if integrity.md5 != expected_md5:
+        return None
+    return integrity
+
+
 def download_one(
     record: RunRecord,
     sra_dir: Path,
@@ -41,13 +66,22 @@ def download_one(
     *,
     run_command: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
     timestamp: Callable[[], float] = time.time,
-) -> Path:
+) -> DownloadResult:
     final_path = run_accession_path(sra_dir, record.run_accession)
     part_path = run_accession_path(sra_dir, record.run_accession, ".part")
+    initial_partial_size = 0
 
-    if verify_download(final_path, record):
+    existing_integrity = _verified_integrity(final_path, record)
+    if existing_integrity is not None:
         LOGGER.info("%s: already present and verified", record.run_accession)
-        return final_path
+        return DownloadResult(
+            path=final_path,
+            admission_method="existing",
+            initial_partial_size=0,
+            observed_size_bytes=existing_integrity.size_bytes,
+            observed_md5=existing_integrity.md5,
+            observed_sha256=existing_integrity.sha256,
+        )
 
     if final_path.exists():
         bad_path = final_path.with_name(f"{final_path.name}.bad.{int(timestamp())}")
@@ -56,17 +90,28 @@ def download_one(
 
     if part_path.exists():
         part_size = part_path.stat().st_size
+        initial_partial_size = part_size
         if part_size > record.sra_size_bytes:
             LOGGER.warning("%s: partial file is oversized; restarting", record.run_accession)
             part_path.unlink()
+            initial_partial_size = 0
         elif part_size == record.sra_size_bytes:
-            if verify_download(part_path, record):
+            part_integrity = _verified_integrity(part_path, record)
+            if part_integrity is not None:
                 os.replace(part_path, final_path)
                 LOGGER.info("%s: resumed from complete partial file after verification", record.run_accession)
-                return final_path
+                return DownloadResult(
+                    path=final_path,
+                    admission_method="promoted_partial",
+                    initial_partial_size=part_size,
+                    observed_size_bytes=part_integrity.size_bytes,
+                    observed_md5=part_integrity.md5,
+                    observed_sha256=part_integrity.sha256,
+                )
             bad_path = part_path.with_name(f"{part_path.name}.bad.{int(timestamp())}")
             part_path.rename(bad_path)
             LOGGER.warning("%s: exact-size partial failed validation; quarantined to %s", record.run_accession, bad_path)
+            initial_partial_size = 0
 
     LOGGER.info(
         "%s: downloading %s (%s)",
@@ -97,7 +142,8 @@ def download_one(
     ]
     run_command(command, check=True)
 
-    if not verify_download(part_path, record):
+    final_integrity = _verified_integrity(part_path, record)
+    if final_integrity is None:
         bad_path = part_path.with_name(f"{part_path.name}.bad.{int(timestamp())}")
         part_path.rename(bad_path)
         raise RuntimeError(
@@ -106,7 +152,14 @@ def download_one(
 
     os.replace(part_path, final_path)
     LOGGER.info("%s: download complete and MD5 verified", record.run_accession)
-    return final_path
+    return DownloadResult(
+        path=final_path,
+        admission_method="resumed_download" if initial_partial_size else "downloaded_fresh",
+        initial_partial_size=initial_partial_size,
+        observed_size_bytes=final_integrity.size_bytes,
+        observed_md5=final_integrity.md5,
+        observed_sha256=final_integrity.sha256,
+    )
 
 
 def download_batch(
@@ -117,8 +170,9 @@ def download_batch(
     jobs: int,
     batch_attempts: int,
     *,
-    download: Callable[[RunRecord, Path, str], Path] = download_one,
+    download: Callable[[RunRecord, Path, str], DownloadResult] = download_one,
     sleep: Callable[[float], None] = time.sleep,
+    on_success: Callable[[RunRecord, DownloadResult], None] | None = None,
 ) -> list[RunRecord]:
     remaining = sorted(records, key=lambda record: record.run_accession)
     failed_path = logs_dir / "failed_accessions.txt"
@@ -141,7 +195,7 @@ def download_batch(
             for future in concurrent.futures.as_completed(futures):
                 record = futures[future]
                 try:
-                    future.result()
+                    result = future.result()
                 except Exception:
                     LOGGER.exception(
                         "%s: download failed on pass %d; continuing with other runs",
@@ -149,6 +203,12 @@ def download_batch(
                         batch_attempt,
                     )
                     failed_this_pass.append(record)
+                    continue
+                try:
+                    if on_success is not None:
+                        on_success(record, result)
+                except Exception:
+                    raise
 
         remaining = sorted(failed_this_pass, key=lambda record: record.run_accession)
         if remaining and batch_attempt < batch_attempts:

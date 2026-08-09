@@ -1,697 +1,232 @@
 # From a Paper to a Reusable Local BioProject Dataset
 
-*An end-to-end tutorial for `ncbi-sra-bioproject-downloader` 0.2.1*
+*An end-to-end tutorial for `ncbi-bioproject-archiver` 0.3.0*
 
-A sequencing paper can be exciting for all the right reasons: an interesting organism, an elegant design, or a dataset that could answer a question the authors never asked. Then comes the less glamorous moment. Somewhere near the end of the article, often in a short data-availability paragraph, you find an accession such as `PRJNA831841`. You now have a route to the data—but not yet a dataset you can safely analyse.
+A publication's BioProject accession is a route to data, not yet a dataset you can safely analyse. The project may contain more runs than the paper used, and a large transfer can fail in ways that leave plausible but incomplete files. `ncbi-bioproject` preserves the metadata, records what was admitted, verifies the authoritative payload, and makes the archive state inspectable later.
 
-The gap between those two things is larger than it first appears. A BioProject can contain many samples and runs. Its current database record may include material that was not central to the paper. The files may be hundreds of gigabytes. A network interruption can leave an apparently plausible but incomplete file. Months later, it may be difficult to remember exactly which records were downloaded, what their checksums were, or which version of the metadata you inspected.
-
-`sra-bioproject` is designed to make that transition orderly. It treats a local BioProject directory as a reproducible acquisition unit:
+The v0.3 lifecycle is:
 
 ```text
-BioProject accession
-    -> preserved metadata snapshot
-    -> normalized tables
-    -> run manifest
-    -> verified SRA files
-    -> optional compressed FASTQ files
+snapshot -> validate metadata -> dry-run -> download authoritative SRA
+         -> verify archive -> status VERIFIED -> optional FASTQ conversion
 ```
 
-This chapter begins with the smallest practical workflow: start with a BioProject accession from a publication, inspect what it represents, estimate the required storage, and download the lossless SRA data. The later sections explore the other routes and controls offered by the command-line application.
+Examples use `PRJNA831841`, the worked example in this repository. It is large, so do not launch its real download merely as a test. Replace it with the accession from your publication and always perform a dry run first. `ncbi-bioproject` is canonical; `sra-bioproject` remains only as a warned compatibility alias.
 
-The commands target release **0.2.1**. Examples use `PRJNA831841`, the worked example already present in this repository. It is a large project, so do not launch its real download merely as a test. Replace that accession with the one from your publication and always perform a dry run first.
+## 1. Identify the BioProject
 
----
+Look in the paper's data-availability or supplementary sections for `PRJNA`, `SRP`, `SRR`, `SAMN`, or `SRX`. A BioProject (`PRJNA...`) is usually the best starting point because it links project, sample, experiment, run, publication, and assembly records.
 
-## 1. Start with the paper, not the download button
+Do not assume that the current BioProject is identical to the dataset analysed in the paper. Compare its organisms, samples, library strategies, and run list with the publication before allocating storage.
 
-The first task is to identify the accession that describes the dataset at the right level.
-
-Look in the paper's *Data availability*, *Data accessibility*, *Sequence data*, or supplementary information sections. Search the PDF for `PRJNA`, `SRP`, `SRR`, `SAMN`, `ENA`, or simply `accession`. The accession prefixes tell you what kind of object you have found:
-
-| Prefix | Usually identifies | Why it matters |
-| --- | --- | --- |
-| `PRJNA...` | NCBI BioProject | The best starting point for a whole study |
-| `SRP...` | SRA study | A sequencing-study record linked to runs |
-| `SAMN...` | BioSample | One biological sample and its provenance |
-| `SRX...` | SRA experiment | Library and sequencing design information |
-| `SRR...` | SRA run | One downloadable sequencing run |
-
-For this workflow, a `PRJNA...` BioProject accession is ideal. It acts as a hub connecting the project description, BioSamples, SRA experiments and runs, publications, assemblies, and other database records.
-
-Do not assume that “the BioProject” and “the data analysed in the paper” are automatically identical. Projects can grow after publication, contain pilot samples, include several sequencing strategies, or connect to related studies. Before allocating disk space, compare the article's methods and sample table with the BioProject metadata. The application helps by preserving the database records and turning them into tables you can inspect.
-
-It is worth recording the paper alongside the accession in your research notes before doing anything else:
+Record the scientific context separately from the application's technical provenance:
 
 ```text
-Paper: <full citation or DOI>
+Paper: <citation or DOI>
 BioProject: PRJNA...
 Scientific purpose: <why this dataset is relevant>
-Expected organism/population/treatment: <brief description>
 Retrieved on: <date>
 ```
 
-The software captures technical retrieval provenance. Your note captures the scientific reason for acquiring the dataset.
+## 2. Install and choose a destination
 
----
-
-## 2. Install the application in an isolated environment
-
-The application requires Python 3.9 or newer. Sequence downloads use `curl`, which is normally already present on macOS and many Linux systems.
-
-A virtual environment keeps the application separate from the rest of your Python installation. To install the tagged 0.2.0 release from GitHub:
+Python 3.9 or newer and `curl` are required. FASTQ conversion additionally needs `fasterq-dump`, `vdb-validate`, and `gzip`; `pigz` is optional.
 
 ```bash
-python3 -m venv ~/.venvs/sra-bioproject
-source ~/.venvs/sra-bioproject/bin/activate
-
-python -m pip install --upgrade pip
-python -m pip install \
-  "git+https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader.git@v0.2.0"
-```
-
-Confirm that the command is available:
-
-```bash
-sra-bioproject --help
-```
-
-For a repository-local installation:
-
-```bash
-git clone --branch v0.2.0 --depth 1 \
-  https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader.git
-
-cd ncbi-sra-bioproject-downloader
-
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv ~/.venvs/ncbi-bioproject
+source ~/.venvs/ncbi-bioproject/bin/activate
 python -m pip install --upgrade pip
 python -m pip install .
+ncbi-bioproject --help
 ```
 
-Whenever you open a new terminal, reactivate the environment before using the command.
-
-You do not need the NCBI SRA Toolkit to create metadata snapshots or download normalized SRA objects. FASTQ conversion additionally requires `fasterq-dump`, `vdb-validate`, and `gzip`; `pigz` is optional but preferable for multithreaded compression.
-
----
-
-## 3. Choose a durable project directory
-
-A BioProject folder should have a stable location and a simple name. The accession itself is an excellent directory name because it is unique, searchable, and easy to connect back to NCBI.
-
-For Linux:
+Choose a stable directory named for the accession:
 
 ```bash
-PROJECT="PRJNA831841"       # replace with the accession from your paper
-DATA_ROOT="/data/bioprojects"
-OUTDIR="$DATA_ROOT/$PROJECT"
-
-mkdir -p "$OUTDIR"
-```
-
-For an external macOS volume:
-
-```bash
-PROJECT="PRJNA831841"       # replace with your accession
+PROJECT="PRJNA831841"
 DATA_ROOT="/Volumes/Bioinfo-1"
 OUTDIR="$DATA_ROOT/$PROJECT"
 
 mkdir -p "$OUTDIR"
-```
-
-Check the destination:
-
-```bash
-test -d "$DATA_ROOT" && test -w "$DATA_ROOT" \
-  && echo "Destination is available"
-
+test -d "$DATA_ROOT" && test -w "$DATA_ROOT"
 df -h "$DATA_ROOT"
 ```
 
-Paths below `/Volumes` receive an additional macOS safety check. A misspelled or unmounted volume causes the application to stop instead of quietly placing data somewhere unintended.
-
----
-
-## 4. Identify yourself to NCBI
-
-NCBI asks programmatic users to provide a real contact email. Set it in the terminal session:
+Paths below `/Volumes` receive an additional macOS mount and writability check. Set a real NCBI contact email for network retrievals:
 
 ```bash
 export NCBI_EMAIL="your.name@example.org"
+export NCBI_TOOL="ncbi-bioproject"
 ```
 
-The default tool identifier is suitable, although it can be made explicit:
+## 3. Create and inspect the metadata snapshot
 
 ```bash
-export NCBI_TOOL="sra-bioproject"
+ncbi-bioproject snapshot "$PROJECT" --outdir "$OUTDIR"
 ```
 
-An API key is optional:
+`metadata` retrieves and normalizes records without a manifest; `snapshot` also writes `manifest.tsv`. Neither downloads sequence data. A native snapshot establishes immutable archive identity and starts the archive in `UNVERIFIED`.
 
-```bash
-export NCBI_API_KEY="your-api-key"
-```
-
-The key is redacted from snapshot provenance and should never be committed to Git.
-
----
-
-## 5. Create the metadata snapshot and run manifest
-
-For the normal accession-first workflow, use `snapshot`:
-
-```bash
-sra-bioproject snapshot "$PROJECT" \
-  --outdir "$OUTDIR"
-```
-
-This retrieves the BioProject and linked public metadata, preserves the raw responses, creates normalized tables, and writes `manifest.tsv`. It **does not download sequence files**.
-
-A snapshot resembles:
+The managed form after snapshot includes:
 
 ```text
-PRJNA.../
-├── manifest.tsv
-└── metadata/
-    ├── snapshot.json
-    ├── raw/
-    │   ├── bioproject.xml
-    │   ├── biosamples.xml
-    │   ├── sra_experiments.xml
-    │   ├── entrez_links.xml
-    │   └── ...
-    └── derived/
-        ├── project.json
-        ├── samples.tsv
-        ├── sample_attributes.tsv
-        ├── runs.tsv
-        ├── publications.tsv
-        ├── relationships.tsv
-        └── linked_resources.tsv
-```
-
-Files under `metadata/raw/` are preserved server responses. Files under `metadata/derived/` are stable normalized products for reading, scripting, and analysis. The manifest is the acquisition recipe: each row records a run URL, expected size, MD5 checksum, BioSample, experiment, library information, and platform metadata.
-
-Some linked resources are optional. A project with no linked publication or a temporary optional-service failure can produce a usable snapshot with `status: partial` and exit status `4`. Inspect:
-
-```bash
-python -m json.tool "$OUTDIR/metadata/snapshot.json" | less
-```
-
-A required BioProject or SRA failure returns status `3` and should be resolved before downloading.
-
----
-
-## 6. Read the snapshot before acquiring sequence files
-
-Begin with the project summary:
-
-```bash
-python -m json.tool \
-  "$OUTDIR/metadata/derived/project.json" | less
-```
-
-Inspect the common sample fields:
-
-```bash
-column -t -s $'\t' \
-  "$OUTDIR/metadata/derived/samples.tsv" | less -S
-```
-
-BioSample records are heterogeneous, so the long-format attribute table often contains the biologically decisive details:
-
-```bash
-column -t -s $'\t' \
-  "$OUTDIR/metadata/derived/sample_attributes.tsv" | less -S
-```
-
-Count the records and inspect the first runs:
-
-```bash
-head -n 5 "$OUTDIR/metadata/derived/runs.tsv"
-
-runs=$(($(wc -l < "$OUTDIR/metadata/derived/runs.tsv") - 1))
-samples=$(($(wc -l < "$OUTDIR/metadata/derived/samples.tsv") - 1))
-
-printf 'samples=%s runs=%s\n' "$samples" "$runs"
-```
-
-Compare these records with the publication. Does the organism match? Are the sample names recognizable? Is the library strategy the one described in the paper? Are there unexpected pilot samples or repeated runs? The cost of discovering a mismatch is low now and potentially high after a large transfer.
-
-Associated literature is summarized in:
-
-```bash
-column -t -s $'\t' \
-  "$OUTDIR/metadata/derived/publications.tsv" | less -S
-```
-
-`relationships.tsv` and `linked_resources.tsv` inventory connected records; they do not instruct the application to recursively download every linked dataset.
-
----
-
-## 7. Validate the snapshot
-
-Run:
-
-```bash
-sra-bioproject validate "$OUTDIR"
-```
-
-This checks metadata checksums, derived products, and manifest consistency. It verifies internal coherence; only the researcher can decide whether the samples fit the scientific question.
-
----
-
-## 8. Measure before downloading
-
-The most useful first download command downloads nothing:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --dry-run
-```
-
-The dry run reports the run count, total SRA size, sequenced bases, destination free space, and manifest path.
-
-Check capacity independently:
-
-```bash
-df -h "$OUTDIR"
-```
-
-Leave room for partial files, filesystem overhead, logs, and downstream work. FASTQ conversion needs much more headroom because SRA, uncompressed staging FASTQ, compressed output, and scratch data may coexist.
-
-For a first acquisition, the safest policy is to retain verified SRA objects and postpone FASTQ conversion.
-
----
-
-## 9. Download verified SRA objects
-
-A foreground download is:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 2
-```
-
-Each run first appears as `SRR....part`. Only after size and MD5 verification is it atomically renamed to `SRR....`. One failed run does not abort the rest; later passes retry only failed accessions.
-
-### Overnight on macOS
-
-Create the log directory before shell redirection:
-
-```bash
-mkdir -p "$OUTDIR/logs"
-
-nohup caffeinate -i \
-  sra-bioproject download "$OUTDIR/manifest.tsv" \
-    --outdir "$OUTDIR" \
-    --jobs 2 \
-  > "$OUTDIR/logs/launcher.log" 2>&1 &
-bg_pid=$!
-
-echo "process id: $bg_pid"
-```
-
-### Overnight on Linux
-
-```bash
-mkdir -p "$OUTDIR/logs"
-
-nohup \
-  sra-bioproject download "$OUTDIR/manifest.tsv" \
-    --outdir "$OUTDIR" \
-    --jobs 2 \
-  > "$OUTDIR/logs/launcher.log" 2>&1 &
-bg_pid=$!
-
-echo "process id: $bg_pid"
-```
-
-On shared systems, use the institution's scheduler or long-session mechanism when required.
-
----
-
-## 10. Monitor progress
-
-The application log shows downloader activity:
-
-```bash
-tail -f "$OUTDIR/logs/download.log"
-```
-
-The launcher log captures shell, command lookup, and redirection failures:
-
-```bash
-tail -f "$OUTDIR/logs/launcher.log"
-```
-
-Check the process:
-
-```bash
-pgrep -af sra-bioproject
-```
-
-A rough count is:
-
-```bash
-expected=$(($(wc -l < "$OUTDIR/manifest.tsv") - 1))
-
-complete=$(
-  find "$OUTDIR/sra" \
-    -type f \
-    ! -name '*.part' \
-    ! -name '*.bad.*' |
-  wc -l |
-  tr -d ' '
-)
-
-printf 'expected=%s complete=%s\n' "$expected" "$complete"
-```
-
-This is a progress aid, not an integrity proof. The application performs the authoritative checks.
-
-Follow storage use with:
-
-```bash
-du -sh "$OUTDIR"/{sra,tmp,fastq} 2>/dev/null
-df -h "$OUTDIR"
-```
-
----
-
-## 11. Resume after interruption
-
-Rerun exactly the same command:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 2
-```
-
-The application verifies and skips completed objects, resumes suitable `.part` files, promotes exact-size partials only after verification, removes oversized partials, and quarantines invalid completed files as `.bad.<timestamp>`.
-
-Do not delete `.part` files merely because a transfer stopped.
-
-For an unstable connection:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 1
-```
-
-Persistent failures are listed in:
-
-```bash
-cat "$OUTDIR/logs/failed_accessions.txt"
-```
-
-A rerun concentrates on incomplete runs because verified files are skipped.
-
----
-
-## 12. What the completed folder represents
-
-After SRA acquisition:
-
-```text
-PRJNA.../
+OUTDIR/
 ├── manifest.tsv
 ├── metadata/
 │   ├── snapshot.json
 │   ├── raw/
-│   ├── derived/
-│   └── archive/
-├── sra/
-│   ├── SRR...
-│   └── ...
-├── tmp/
-└── logs/
-    ├── download.log
-    └── launcher.log
+│   └── derived/
+│       ├── project.json
+│       ├── samples.tsv
+│       ├── sample_attributes.tsv
+│       └── runs.tsv
+└── provenance/
+    └── archive.json
 ```
 
-This is more than a directory of sequence files. The raw metadata records what remote services returned. Derived tables make it usable. The manifest records which objects were expected and how they were verified. `snapshot.json` records retrieval time, software version, sources, checksums, warnings, and counts.
+Raw files preserve server responses. Derived files are normalized products for inspection and scripting. The manifest records the lossless `SRA Normalized` object, expected size, upstream MD5, URL, run, sample, experiment, and library metadata.
 
-Keep these pieces together. Separating sequence files from their manifest and metadata weakens the provenance of the local dataset.
-
-Add a brief human-written note describing the source publication, why the project was acquired, and any decision to include or exclude runs. The application records acquisition facts, not analytical judgement.
-
----
-
-## Exploring the rest of the CLI
-
-The `snapshot -> validate -> dry-run -> download` route is the usual path. The alternatives below become useful as projects and workflows grow.
-
-## Retrieve metadata without creating a manifest
-
-Use `metadata` for reconnaissance:
+Inspect before downloading:
 
 ```bash
-sra-bioproject metadata "$PROJECT" \
-  --outdir "$OUTDIR"
+python -m json.tool "$OUTDIR/metadata/derived/project.json" | less
+column -t -s $'\t' "$OUTDIR/metadata/derived/samples.tsv" | less -S
+column -t -s $'\t' "$OUTDIR/metadata/derived/sample_attributes.tsv" | less -S
+head -n 5 "$OUTDIR/metadata/derived/runs.tsv"
 ```
 
-It preserves and normalizes metadata but does not write `manifest.tsv`. A manifest can later be generated offline:
+Optional linked-resource failures produce a partial snapshot and exit status `4`. Required BioProject or SRA retrieval failures produce status `3` and should be resolved before acquisition.
+
+## 4. Validate metadata and measure storage
+
+Validate the metadata snapshot separately from archive integrity:
 
 ```bash
-sra-bioproject metadata-normalize \
-  --metadata-dir "$OUTDIR/metadata" \
-  --manifest "$OUTDIR/manifest.tsv"
+ncbi-bioproject validate "$OUTDIR"
 ```
 
-## Search Europe PMC for accession mentions
-
-Explicit NCBI links are the high-confidence publication source. To search for papers that mention the accession without being formally linked:
+Then perform a no-network capacity check. On a fresh destination, provide the accession explicitly so archive identity is unambiguous:
 
 ```bash
-sra-bioproject snapshot "$PROJECT" \
+ncbi-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
   --outdir "$OUTDIR" \
-  --include-literature-search
+  --dry-run \
+  --bioproject "$PROJECT"
 ```
 
-Text-discovered associations remain labelled separately from curated and database links. Inspect them rather than assuming that every mention is the original publication.
+The dry run reports run count, normalized SRA size, sequenced bases, and free space. Reserve room for partial files, logs, filesystem overhead, and downstream work. FASTQ conversion needs considerably more space.
 
-## Reuse an existing SRA XML export
+## 5. Download the authoritative SRA objects
 
 ```bash
-sra-bioproject snapshot "$PROJECT" \
+ncbi-bioproject download "$OUTDIR/manifest.tsv" \
   --outdir "$OUTDIR" \
-  --sra-xml /path/to/existing-sra-export.xml
+  --jobs 2
 ```
 
-The supplied file becomes `metadata/raw/sra_experiments.xml` and is processed by the same canonical parser.
+The lossless SRA object under `sra/<RUN_ACCESSION>` is authoritative. Each transfer uses a `.part` file and promotes it only after expected size and MD5 verification. Verified files are skipped on reruns; invalid files are quarantined as `.bad.<timestamp>`.
 
-## Refresh metadata without erasing history
+For an overnight macOS run:
 
 ```bash
-sra-bioproject snapshot "$PROJECT" \
-  --outdir "$OUTDIR" \
-  --refresh
+mkdir -p "$OUTDIR/logs"
+nohup caffeinate -i ncbi-bioproject download "$OUTDIR/manifest.tsv" \
+  --outdir "$OUTDIR" --jobs 2 \
+  > "$OUTDIR/logs/launcher.log" 2>&1 &
 ```
 
-The previous metadata state is archived under:
+Rerun the same command after an interruption. Leave `.part` files in place so suitable transfers can resume. Inspect `logs/download.log` and `logs/failed_accessions.txt` when a pass ends with failures.
 
-```text
-metadata/archive/YYYYMMDDTHHMMSSZ-<8hex>/
-```
+## 6. Verify the archive and inspect lifecycle status
 
-Sequence files remain untouched. Compare old and new run manifests before acquiring newly added records.
-The refresh operation is transactional: the replacement snapshot is built and validated in staging before the swap.
-
-## Rebuild derived products offline
+After acquisition, perform archive-wide verification:
 
 ```bash
-sra-bioproject metadata-normalize \
-  --metadata-dir "$OUTDIR/metadata" \
-  --manifest "$OUTDIR/manifest.tsv"
+ncbi-bioproject verify "$OUTDIR"
+ncbi-bioproject status "$OUTDIR"
 ```
 
-This is useful after software upgrades or accidental deletion of derived tables. The command preserves retrieval provenance so derived outputs remain reproducible for a given raw snapshot.
+Verification rereads every authoritative SRA object and writes a validation attestation under `provenance/validations/`. Admission events are recorded in `provenance/acquisitions.jsonl`. A successful verification leaves the archive `VERIFIED`.
 
-## Convert a standalone XML export to TSV
+`status` is read-only. It validates every historical attestation, then evaluates the latest completed attestation against the current manifest, provenance, metadata control state, and quick payload sentinel. It does not reread every payload byte, so run `verify` for a fresh cryptographic statement.
+
+The possible states are:
+
+| State | Meaning |
+| --- | --- |
+| `UNINITIALIZED` | No recognizable archive or metadata exists. |
+| `LEGACY` | Recognizable pre-v0.3 material has not completed bootstrap. |
+| `UNVERIFIED` | Native identity exists without an applicable PASS attestation. |
+| `STALE` | A prior PASS no longer matches current control or payload-sentinel state. |
+| `FAILED` | A current verification found actual integrity failures. |
+| `VERIFIED` | The latest completed attestation is a valid PASS for current state. |
+| `INVALID` | Control or provenance state cannot safely be interpreted. |
+
+For deep verification, install the SRA Toolkit and run:
 
 ```bash
-sra-bioproject manifest /path/to/export.xml \
-  --output /path/to/manifest.tsv
+ncbi-bioproject verify "$OUTDIR" --deep
+vdb-validate "$OUTDIR/sra/SRR12345678"
 ```
 
-Use `--output -` for standard output:
+Deep verification requires `vdb-validate`; its absence is not silently ignored.
+
+Pre-v0.3 legacy directories may lack `provenance/`. Legacy adoption is all-or-nothing: every required authoritative SRA object must pass read-only verification before identity, admission provenance, and the first PASS attestation are published. If one object fails, no managed provenance is published and the directory remains `LEGACY`.
+
+## 7. Convert verified SRA to compressed FASTQ
+
+FASTQ is derived output and does not replace the authoritative SRA object. Convert it only after the archive has been verified:
 
 ```bash
-sra-bioproject manifest /path/to/export.xml \
-  --output -
-```
-
-The repository also includes:
-
-```bash
-python scripts/sra_xml_to_manifest.py \
-  /path/to/export.xml \
-  --output /path/to/manifest.tsv
-```
-
-## Download from XML instead of TSV
-
-```bash
-sra-bioproject download /path/to/export.xml \
-  --outdir "$OUTDIR" \
-  --dry-run
-```
-
-Format is inferred from `.xml` or `.tsv`. For an unusual suffix:
-
-```bash
-sra-bioproject download /path/to/input.data \
-  --input-format xml \
-  --outdir "$OUTDIR" \
-  --dry-run
-```
-
-The TSV manifest is usually preferable for long-term review and comparison.
-
-## Tune concurrency and retry passes
-
-Increase concurrent transfers cautiously:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 4
-```
-
-More jobs do not guarantee more speed. Start with two; use one on unstable connections.
-
-Increase batch retry passes when needed:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 2 \
-  --batch-attempts 5
-```
-
-For detailed logs:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --verbose
-```
-
-## Tune metadata requests
-
-```bash
-sra-bioproject snapshot "$PROJECT" \
-  --outdir "$OUTDIR" \
-  --timeout 120 \
-  --attempts 6
-```
-
-The email and tool can be provided directly, although environment variables are more convenient:
-
-```bash
-sra-bioproject snapshot "$PROJECT" \
-  --outdir "$OUTDIR" \
-  --email "your.name@example.org" \
-  --tool "my-lab-sra-acquisition"
-```
-
-## Convert SRA to compressed FASTQ
-
-The conservative two-stage workflow is:
-
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR"
-
-sra-bioproject download "$OUTDIR/manifest.tsv" \
+ncbi-bioproject download "$OUTDIR/manifest.tsv" \
   --outdir "$OUTDIR" \
   --mode fastq \
   --threads 8
 ```
 
-The second command verifies and skips existing SRA files, converts runs sequentially with `fasterq-dump --split-files`, compresses with `pigz` or `gzip`, tests the archives, and writes completion markers.
+The command verifies and skips completed SRA files, runs `fasterq-dump --split-files`, compresses with `pigz` or `gzip`, tests gzip integrity, and writes completion markers. `vdb-validate` runs by default; `--skip-vdb-validate` is an explicit exception. SRA files are always retained. `--delete-sra-after-fastq` is rejected under the v0.3 archival contract.
 
-SRA files are retained by default. To delete each one only after successful FASTQ conversion:
+## Other workflows
 
-```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --mode fastq \
-  --threads 8 \
-  --delete-sra-after-fastq
-```
-
-This is a storage-policy choice, not merely a performance option.
-
-`vdb-validate` runs by default. It can be skipped deliberately:
+Use metadata reconnaissance without a manifest:
 
 ```bash
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --mode fastq \
-  --skip-vdb-validate
+ncbi-bioproject metadata "$PROJECT" --outdir "$OUTDIR"
 ```
 
----
+Refresh metadata transactionally:
+
+```bash
+ncbi-bioproject snapshot "$PROJECT" --outdir "$OUTDIR" --refresh
+```
+
+The previous metadata state is archived under `metadata/archive/`; sequence files and provenance remain in place. Rebuild derived products without network access with:
+
+```bash
+ncbi-bioproject metadata-normalize \
+  --metadata-dir "$OUTDIR/metadata" \
+  --manifest "$OUTDIR/manifest.tsv"
+```
+
+Use `--include-literature-search` for opt-in Europe PMC accession searching. Use `--sra-xml /path/to/export.xml` to process an existing SRA XML export. For a standalone XML or TSV, `download --input-format xml|tsv` selects the input explicitly when the suffix is unusual.
 
 ## Exit statuses
 
 | Status | Meaning |
 | ---: | --- |
-| `0` | Complete success |
-| `1` | General failure or persistent sequence download failure |
+| `0` | Complete success or current `VERIFIED` status |
+| `1` | General failure or persistent download failure |
 | `2` | Invalid input or configuration |
 | `3` | Required metadata retrieval incomplete |
-| `4` | Snapshot completed with optional metadata missing |
-| `5` | Metadata normalization or validation failure |
+| `4` | Optional metadata missing from an otherwise usable snapshot |
+| `5` | Metadata normalization, archive verification, or integrity failure |
+| `6` | `status` reports an actionable non-current lifecycle state |
 | `130` | Keyboard interruption |
-
-Status `4` is a prompt to inspect warnings, not an automatic declaration that the SRA manifest is unusable.
-
----
-
-## A compact copy-and-adapt recipe
-
-```bash
-PROJECT="PRJNA831841"       # replace this
-DATA_ROOT="/path/to/bioprojects"
-OUTDIR="$DATA_ROOT/$PROJECT"
-
-export NCBI_EMAIL="your.name@example.org"
-
-mkdir -p "$OUTDIR"
-
-sra-bioproject snapshot "$PROJECT" \
-  --outdir "$OUTDIR"
-
-# Inspect project.json, samples.tsv, sample_attributes.tsv, and runs.tsv.
-
-sra-bioproject validate "$OUTDIR"
-
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --dry-run
-
-sra-bioproject download "$OUTDIR/manifest.tsv" \
-  --outdir "$OUTDIR" \
-  --jobs 2
-```
-
-The responsible workflow is not “find an accession and download everything.” It is “find an accession, understand the project, preserve its provenance, measure the transfer, and then acquire verified objects.”
-
-That habit scales from a handful of runs on a laptop to hundreds of genomes on dedicated storage. More importantly, it leaves your future self with a dataset whose origin and integrity can still be understood after the paper, terminal session, and download night have faded from memory.
-
----
 
 ## Further reading
 
-- [README](../README.md) — installation and command summary
-- [Design notes](design.md) — manifest, integrity, recovery, and metadata architecture
-- [Troubleshooting](troubleshooting.md) — mounted volumes, TLS failures, retries, partial files, and metadata recovery
-- [Development history](development-history.md) — how the downloader evolved and why its recovery behaviour exists
+- [README](../README.md) for installation and command summary
+- [Design notes](design.md) for manifest, integrity, recovery, and metadata architecture
+- [Archive lifecycle decision](decisions/archive-lifecycle.md) for state and provenance rules
+- [Troubleshooting](troubleshooting.md) for mounts, TLS failures, retries, and recovery
+- [Development history](development-history.md) for the incidents that shaped the downloader

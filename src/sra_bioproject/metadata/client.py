@@ -36,7 +36,7 @@ class MetadataClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.email = email if email is not None else os.getenv("NCBI_EMAIL", "")
-        self.tool = tool if tool is not None else os.getenv("NCBI_TOOL", "sra-bioproject")
+        self.tool = tool if tool is not None else os.getenv("NCBI_TOOL", "ncbi-bioproject")
         self.api_key = api_key if api_key is not None else os.getenv("NCBI_API_KEY", "")
         self.timeout = timeout
         self.attempts = attempts
