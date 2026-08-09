@@ -5,9 +5,10 @@ type: software
 authors:
   - family-names: "Costantini"
     given-names: "Carlo"
-repository-code: "https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader"
+repository-code: "https://github.com/costantinicarlo/ncbi-bioproject-archiver"
 license: MIT
 version: 0.3.0
+date-released: "2026-08-09"
 keywords:
   - NCBI
   - SRA

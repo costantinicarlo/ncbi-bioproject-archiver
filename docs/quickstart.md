@@ -1,6 +1,6 @@
-# From a Paper to a Reusable Local BioProject Dataset
+# Quick Start: From a BioProject Accession to a Verified Local Archive
 
-*An end-to-end tutorial for `ncbi-bioproject-archiver` 0.3.0*
+*The shortest operational path through `ncbi-bioproject-archiver` 0.3.0*
 
 A publication's BioProject accession is a route to data, not yet a dataset you can safely analyse. The project may contain more runs than the paper used, and a large transfer can fail in ways that leave plausible but incomplete files. `ncbi-bioproject` preserves the metadata, records what was admitted, verifies the authoritative payload, and makes the archive state inspectable later.
 
