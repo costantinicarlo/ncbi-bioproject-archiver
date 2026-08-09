@@ -202,8 +202,6 @@ def _validate_attestation(
         raise ValueError(f"Attestation missing required keys: {', '.join(missing_keys)}")
     if payload["schema_version"] != archive_module.ATTESTATION_SCHEMA_VERSION:
         raise ValueError("Attestation schema_version is unsupported")
-    if payload["validation_policy_version"] != archive_module.VALIDATION_POLICY_VERSION:
-        return payload
     if not isinstance(payload["application"], str) or not payload["application"].strip():
         raise ValueError("Attestation application must be a non-empty string")
     if not isinstance(payload["application_version"], str) or not payload["application_version"].strip():
@@ -524,7 +522,11 @@ def verify_project(
             observed_sha256 = verified_integrities[record.run_accession].sha256
             initial_partial_size = 0
         else:
-            admission_method = provenance_result.admission_method
+            admission_method = (
+                "legacy_observation"
+                if provenance_result.admission_method == "existing"
+                else provenance_result.admission_method
+            )
             observed_size_bytes = provenance_result.observed_size_bytes
             observed_md5 = provenance_result.observed_md5
             observed_sha256 = provenance_result.observed_sha256

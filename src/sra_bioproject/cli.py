@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 
 from . import __version__
 from . import archive as archive_module
@@ -242,15 +243,13 @@ def _resolve_download_bioproject(outdir: Path, explicit_bioproject: str | None) 
 
 def _append_native_admission(outdir: Path, archive_id: str, record, result) -> None:
     admissions = archive_module.load_admission_records(outdir)
-    if result.admission_method == "existing":
-        for item in admissions:
-            if (
-                item.get("accession") == record.run_accession
-                and item.get("relative_path") == f"sra/{record.run_accession}"
-                and item.get("observed_sha256") == result.observed_sha256
-                and item.get("admission_method") == "existing"
-            ):
-                return
+    for item in admissions:
+        if (
+            item.get("accession") == record.run_accession
+            and item.get("relative_path") == f"sra/{record.run_accession}"
+            and item.get("observed_sha256") == result.observed_sha256
+        ):
+            return
     payload = archive_module.create_admission_record(
         archive_id,
         {
@@ -271,25 +270,13 @@ def _append_native_admission(outdir: Path, archive_id: str, record, result) -> N
 
 
 def _is_recognizable_legacy_destination(outdir: Path) -> bool:
-    return (
-        (outdir / "manifest.tsv").is_file()
-        or (outdir / "metadata" / "snapshot.json").is_file()
-        or ((outdir / "sra").exists() and any((outdir / "sra").iterdir()))
-        or ((outdir / "fastq").exists() and any((outdir / "fastq").iterdir()))
-    )
+    _, legacy, _ = archive_module.classify_destination(outdir)
+    return legacy
 
 
 def _is_native_new_destination(outdir: Path) -> bool:
-    if archive_module.archive_metadata_path(outdir).is_file():
-        return False
-    if _is_recognizable_legacy_destination(outdir):
-        return False
-    if not outdir.exists():
-        return True
-    if not outdir.is_dir():
-        return False
-    entries = [child for child in outdir.iterdir() if child.name not in {"logs", "tmp"}]
-    return not entries
+    _, _, new_destination = archive_module.classify_destination(outdir)
+    return new_destination
 
 
 def run_download(args: argparse.Namespace) -> int:
@@ -310,9 +297,7 @@ def run_download(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    managed_archive = archive_module.archive_metadata_path(outdir).is_file()
-    legacy_destination = (not managed_archive) and _is_recognizable_legacy_destination(outdir)
-    new_destination = _is_native_new_destination(outdir)
+    managed_archive, legacy_destination, new_destination = archive_module.classify_destination(outdir)
 
     if args.dry_run:
         records, input_format = load_records(args.input, args.input_format)
@@ -339,16 +324,35 @@ def run_download(args: argparse.Namespace) -> int:
     records, input_format = load_records(args.input, args.input_format)
     manifest_path = outdir / "manifest.tsv"
     previous_manifest = manifest_path.read_bytes() if legacy_destination and manifest_path.is_file() else None
-    write_manifest(records, manifest_path)
+    staging_manifest_path = None
     if new_destination:
-        archive_module.write_archive_metadata(
-            outdir,
-            archive_module.create_archive_metadata(
-                bioproject,
-                origin="native",
-                application_version=__version__,
-            ),
-        )
+        descriptor, staged_manifest = tempfile.mkstemp(dir=outdir, prefix=".manifest.", suffix=".tsv")
+        os.close(descriptor)
+        staging_manifest_path = Path(staged_manifest)
+        write_manifest(records, staging_manifest_path)
+        try:
+            archive_module.write_archive_metadata(
+                outdir,
+                archive_module.create_archive_metadata(
+                    bioproject,
+                    origin="native",
+                    application_version=__version__,
+                ),
+            )
+            os.replace(staging_manifest_path, manifest_path)
+            staging_manifest_path = None
+        except Exception:
+            if staging_manifest_path is not None and staging_manifest_path.exists():
+                staging_manifest_path.unlink()
+            archive_metadata_path = archive_module.archive_metadata_path(outdir)
+            if archive_metadata_path.exists():
+                archive_metadata_path.unlink()
+                provenance_dir = archive_module.provenance_directory(outdir)
+                if provenance_dir.exists() and not any(provenance_dir.iterdir()):
+                    provenance_dir.rmdir()
+            raise
+    else:
+        write_manifest(records, manifest_path)
     archive_id = None if legacy_destination else str(archive_module.load_archive_metadata(outdir)["archive_id"])
     total_sra = sum(record.sra_size_bytes for record in records)
     total_bases = sum(record.total_bases for record in records)
@@ -426,7 +430,10 @@ def run_download(args: argparse.Namespace) -> int:
                 manifest_path.unlink()
             elif previous_manifest is not None:
                 manifest_path.write_bytes(previous_manifest)
-        return verification_exit
+            return verification_exit
+    else:
+        if args.mode == "sra":
+            return 0
 
     if args.mode == "sra":
         return 0

@@ -185,6 +185,7 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
         swapped_metadata = False
         swapped_manifest = False
         created_archive_metadata = False
+        _, legacy_destination, _ = archive_module.classify_destination(outdir)
 
         try:
             if metadata_dir.exists():
@@ -214,7 +215,7 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
                     outdir,
                     archive_module.create_archive_metadata(
                         accession,
-                        origin="native",
+                        origin="legacy" if legacy_destination else "native",
                         application_version=__version__,
                     ),
                 )

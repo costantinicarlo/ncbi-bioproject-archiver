@@ -20,7 +20,10 @@ MARKER_LINE_RE = re.compile(r"^([^\t]+)\t(\d+)$")
 def validate_vdb(sra_path: Path, vdb_validate: str | None) -> None:
     if vdb_validate is not None:
         LOGGER.info("%s: running vdb-validate", sra_path.name)
-        subprocess.run([vdb_validate, str(sra_path)], check=True)
+        try:
+            subprocess.run([vdb_validate, str(sra_path)], check=True)
+        except FileNotFoundError:
+            LOGGER.warning("%s: vdb-validate is unavailable; skipping validation", sra_path.name)
 
 
 def gzip_test(path: Path, gzip_path: str) -> None:

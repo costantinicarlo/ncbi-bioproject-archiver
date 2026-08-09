@@ -256,6 +256,32 @@ def test_verify_bootstrap_uses_download_result_provenance_when_available(tmp_pat
     assert admissions[0]["byte_acquisition"]["provenance"] == "fresh_download"
 
 
+def test_verify_bootstrap_maps_existing_download_results_to_legacy_observation(tmp_path: Path) -> None:
+    write_manifest([make_record()], tmp_path / "manifest.tsv")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+
+    result = DownloadResult(
+        path=sra_dir / "SRR1",
+        admission_method="existing",
+        initial_partial_size=0,
+        observed_size_bytes=5,
+        observed_md5="5d41402abc4b2a76b9719d911017c592",
+        observed_sha256="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    )
+
+    assert verify_project(
+        tmp_path,
+        bioproject="PRJNA000001",
+        admission_provenance={"SRR1": result},
+    ) == 0
+
+    admissions = archive.load_admission_records(tmp_path)
+    assert len(admissions) == 1
+    assert admissions[0]["admission_method"] == "legacy_observation"
+
+
 def test_status_is_invalid_for_escaping_snapshot_tracked_path(tmp_path: Path) -> None:
     archive.write_archive_metadata(
         tmp_path,

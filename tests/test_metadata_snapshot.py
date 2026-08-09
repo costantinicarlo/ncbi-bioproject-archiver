@@ -51,6 +51,22 @@ def test_snapshot_refuses_overwrite_archives_refresh_and_validates(tmp_path: Pat
     assert (archives[0] / "snapshot.json").is_file()
 
 
+def test_snapshot_marks_legacy_destination_when_pre_v3_sra_only_archive_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    (tmp_path / "manifest.tsv").write_text("placeholder\n", encoding="utf-8")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=False)
+
+    archive_metadata = archive.load_archive_metadata(tmp_path)
+    assert archive_metadata["origin"] == "legacy"
+
+
 def test_snapshot_initialization_failure_restores_clean_new_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

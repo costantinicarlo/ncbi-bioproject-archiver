@@ -125,6 +125,26 @@ def admission_records_path(project_dir: Path) -> Path:
     return provenance_directory(project_dir) / "acquisitions.jsonl"
 
 
+def classify_destination(project_dir: Path) -> tuple[bool, bool, bool]:
+    managed = archive_metadata_path(project_dir).is_file()
+    if managed:
+        return True, False, False
+    if not project_dir.exists():
+        return False, False, True
+    if not project_dir.is_dir():
+        return False, False, False
+    legacy = (
+        (project_dir / "manifest.tsv").is_file()
+        or (project_dir / "metadata" / "snapshot.json").is_file()
+        or ((project_dir / "sra").exists() and any((project_dir / "sra").iterdir()))
+        or ((project_dir / "fastq").exists() and any((project_dir / "fastq").iterdir()))
+    )
+    if legacy:
+        return False, True, False
+    entries = [child for child in project_dir.iterdir() if child.name not in {"logs", "tmp"}]
+    return False, False, not entries
+
+
 def create_archive_metadata(
     bioproject: str,
     *,
