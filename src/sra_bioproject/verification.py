@@ -164,6 +164,69 @@ def _load_attestations(project_dir: Path) -> list[dict[str, object]]:
     return payloads
 
 
+def _validate_attestation(
+    payload: dict[str, object],
+    *,
+    archive_id: str,
+    bioproject: str,
+) -> dict[str, object]:
+    required_keys = {
+        "schema_version",
+        "validation_policy_version",
+        "application",
+        "application_version",
+        "mode",
+        "started_at",
+        "completed_at",
+        "archive_id",
+        "bioproject",
+        "control_fingerprint",
+        "quick_payload_fingerprint",
+        "result",
+        "runs_checked",
+        "per_run",
+        "failures",
+    }
+    missing_keys = sorted(required_keys - set(payload))
+    if missing_keys:
+        raise ValueError(f"Attestation missing required keys: {', '.join(missing_keys)}")
+    if payload["schema_version"] != archive_module.ATTESTATION_SCHEMA_VERSION:
+        raise ValueError("Attestation schema_version is unsupported")
+    if payload["validation_policy_version"] != archive_module.VALIDATION_POLICY_VERSION:
+        return payload
+    if not isinstance(payload["application"], str) or not payload["application"].strip():
+        raise ValueError("Attestation application must be a non-empty string")
+    if not isinstance(payload["application_version"], str) or not payload["application_version"].strip():
+        raise ValueError("Attestation application_version must be a non-empty string")
+    if payload["mode"] not in {"standard", "deep"}:
+        raise ValueError("Attestation mode must be standard or deep")
+    for key in ("started_at", "completed_at"):
+        if not isinstance(payload[key], str) or not payload[key].strip():
+            raise ValueError(f"Attestation {key} must be a non-empty string")
+    if str(payload["archive_id"]) != archive_id:
+        raise ValueError("Attestation archive_id does not match archive.json")
+    if str(payload["bioproject"]) != bioproject:
+        raise ValueError("Attestation bioproject does not match archive.json")
+    for key in ("control_fingerprint", "quick_payload_fingerprint"):
+        value = payload[key]
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"Attestation {key} must be a SHA-256 hex digest")
+        try:
+            int(value, 16)
+        except ValueError as exc:
+            raise ValueError(f"Attestation {key} must be a SHA-256 hex digest") from exc
+    if payload["result"] not in {"pass", "fail"}:
+        raise ValueError("Attestation result must be pass or fail")
+    runs_checked = payload["runs_checked"]
+    if not isinstance(runs_checked, int) or runs_checked < 0:
+        raise ValueError("Attestation runs_checked must be a non-negative integer")
+    if not isinstance(payload["per_run"], list):
+        raise ValueError("Attestation per_run must be a list")
+    if not isinstance(payload["failures"], list):
+        raise ValueError("Attestation failures must be a list")
+    return payload
+
+
 def _validate_managed_identity(
     archive_metadata: dict[str, object],
     admissions: list[dict[str, object]],
@@ -202,11 +265,22 @@ def status_project(project_dir: Path) -> dict[str, object]:
     if not attestations:
         return {"state": "UNVERIFIED", "bioproject": archive_metadata["bioproject"]}
 
-    current_control_fingerprint = archive_module.control_fingerprint(
-        _current_control_state(project_dir, archive_metadata, admissions)
-    )
-    current_quick_fingerprint = archive_module.quick_payload_fingerprint(_quick_payload_entries(project_dir))
-    attestation = attestations[-1]
+    try:
+        attestation = _validate_attestation(
+            attestations[-1],
+            archive_id=str(archive_metadata["archive_id"]),
+            bioproject=str(archive_metadata["bioproject"]),
+        )
+    except Exception as exc:
+        return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
+
+    try:
+        current_control_fingerprint = archive_module.control_fingerprint(
+            _current_control_state(project_dir, archive_metadata, admissions)
+        )
+        current_quick_fingerprint = archive_module.quick_payload_fingerprint(_quick_payload_entries(project_dir))
+    except Exception as exc:
+        return {"state": "INVALID", "bioproject": archive_metadata["bioproject"], "reason": str(exc)}
     if attestation.get("validation_policy_version") != archive_module.VALIDATION_POLICY_VERSION:
         return {"state": "STALE", "bioproject": archive_metadata["bioproject"]}
     if attestation.get("control_fingerprint") != current_control_fingerprint:

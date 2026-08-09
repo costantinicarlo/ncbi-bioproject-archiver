@@ -27,6 +27,12 @@ _SUPPORTED_ADMISSION_METHODS = {
     "existing",
     "legacy_observation",
 }
+_BYTE_PROVENANCE_VALUES = {
+    "fresh_download",
+    "mixed_or_unknown",
+    "unknown_promoted_partial",
+    "unknown",
+}
 
 
 def _utc_now() -> str:
@@ -49,6 +55,27 @@ def _safe_relative_path(path_value: str) -> bool:
     if path.is_absolute():
         return False
     return all(part not in ("", ".", "..") for part in path.parts)
+
+
+def _validate_uuid(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty UUID string")
+    try:
+        return str(uuid.UUID(value.strip()))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid UUID string") from exc
+
+
+def _validate_utc_timestamp(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty timestamp")
+    raw = value.strip()
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO-8601 timestamp") from exc
+    return raw
 
 
 def _fsync_directory(path: Path) -> None:
@@ -173,10 +200,12 @@ def _validate_archive_metadata(metadata: dict[str, object]) -> dict[str, object]
     schema_version = metadata.get("schema_version")
     if not isinstance(schema_version, str) or schema_version.split(".", 1)[0] != ARCHIVE_SCHEMA_VERSION.split(".", 1)[0]:
         raise ValueError(f"Unsupported archive schema major version: {schema_version}")
+    metadata["archive_id"] = _validate_uuid(metadata.get("archive_id"), "archive.json archive_id")
     metadata["bioproject"] = validate_bioproject(str(metadata.get("bioproject", "")))
     origin = metadata.get("origin")
     if origin not in {"native", "legacy"}:
         raise ValueError(f"Invalid archive origin: {origin!r}")
+    metadata["created_at"] = _validate_utc_timestamp(metadata.get("created_at"), "archive.json created_at")
     created_by = metadata.get("created_by")
     if not isinstance(created_by, dict):
         raise ValueError("archive.json created_by must be an object")
@@ -208,11 +237,9 @@ def _validate_admission_record(record: dict[str, object]) -> dict[str, object]:
     if not isinstance(schema_version, str) or schema_version.split(".", 1)[0] != ACQUISITION_SCHEMA_VERSION.split(".", 1)[0]:
         raise ValueError(f"Unsupported acquisition schema major version: {schema_version}")
     event_id = record.get("event_id")
-    if not isinstance(event_id, str) or not event_id.strip():
-        raise ValueError("acquisition record must have a non-empty event_id")
+    record["event_id"] = _validate_uuid(event_id, "acquisition record event_id")
     archive_id = record.get("archive_id")
-    if not isinstance(archive_id, str) or not archive_id.strip():
-        raise ValueError("acquisition record must have a non-empty archive_id")
+    record["archive_id"] = _validate_uuid(archive_id, "acquisition record archive_id")
     accession = record.get("accession")
     if not isinstance(accession, str) or not RUN_ACCESSION_RE.fullmatch(accession.strip().upper()):
         raise ValueError(f"Invalid run accession: {accession!r}")
@@ -223,33 +250,57 @@ def _validate_admission_record(record: dict[str, object]) -> dict[str, object]:
     if admission_method not in _SUPPORTED_ADMISSION_METHODS:
         raise ValueError(f"Unsupported admission method: {admission_method!r}")
     admitted_at = record.get("admitted_at")
-    if not isinstance(admitted_at, str) or not admitted_at.strip():
-        raise ValueError("acquisition record must have a non-empty admitted_at")
+    record["admitted_at"] = _validate_utc_timestamp(admitted_at, "acquisition record admitted_at")
     for key in ("admitted_by_application", "admitted_by_version"):
         value = record.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"acquisition record must have a non-empty {key}")
     for key in ("expected_md5", "observed_md5"):
         if key not in record:
-            continue
+            raise ValueError(f"acquisition record missing required field: {key}")
         value = record.get(key)
-        if value is not None and (not isinstance(value, str) or not MD5_RE.fullmatch(value.lower())):
+        if not isinstance(value, str) or not MD5_RE.fullmatch(value.lower()):
             raise ValueError(f"acquisition record has invalid {key}")
     observed_sha256 = record.get("observed_sha256")
-    if observed_sha256 is not None and (
-        not isinstance(observed_sha256, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", observed_sha256.lower())
-    ):
+    if observed_sha256 is None:
+        raise ValueError("acquisition record missing required field: observed_sha256")
+    if not isinstance(observed_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", observed_sha256.lower()):
         raise ValueError("acquisition record has invalid observed_sha256")
     for key in ("expected_size_bytes", "observed_size_bytes"):
         if key not in record:
-            continue
+            raise ValueError(f"acquisition record missing required field: {key}")
         value = record.get(key)
-        if value is not None and (not isinstance(value, int) or value < 0):
+        if not isinstance(value, int) or value < 0:
             raise ValueError(f"acquisition record has invalid {key}")
     byte_acquisition = record.get("byte_acquisition")
     if not isinstance(byte_acquisition, dict):
         raise ValueError("acquisition record byte_acquisition must be an object")
+    provenance = byte_acquisition.get("provenance")
+    if not isinstance(provenance, str) or provenance not in _BYTE_PROVENANCE_VALUES:
+        raise ValueError("acquisition record byte_acquisition.provenance is invalid")
+    if admission_method == "downloaded_fresh":
+        application = byte_acquisition.get("application")
+        version = byte_acquisition.get("version")
+        if provenance != "fresh_download":
+            raise ValueError("downloaded_fresh acquisition record must use fresh_download provenance")
+        if not isinstance(application, str) or not application.strip():
+            raise ValueError("downloaded_fresh acquisition record must include byte_acquisition.application")
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("downloaded_fresh acquisition record must include byte_acquisition.version")
+    if admission_method == "resumed_download":
+        if provenance != "mixed_or_unknown":
+            raise ValueError("resumed_download acquisition record must use mixed_or_unknown provenance")
+        initial_partial_size = byte_acquisition.get("initial_partial_size")
+        if not isinstance(initial_partial_size, int) or initial_partial_size < 0:
+            raise ValueError("resumed_download acquisition record must include non-negative initial_partial_size")
+    if admission_method == "promoted_partial":
+        if provenance != "unknown_promoted_partial":
+            raise ValueError("promoted_partial acquisition record must use unknown_promoted_partial provenance")
+        initial_partial_size = byte_acquisition.get("initial_partial_size")
+        if not isinstance(initial_partial_size, int) or initial_partial_size < 0:
+            raise ValueError("promoted_partial acquisition record must include non-negative initial_partial_size")
+    if admission_method in {"existing", "legacy_observation"} and provenance != "unknown":
+        raise ValueError("existing and legacy_observation acquisition records must use unknown provenance")
     return record
 
 

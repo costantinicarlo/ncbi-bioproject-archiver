@@ -35,7 +35,11 @@ def test_replace_admission_records_round_trip_and_rejects_duplicate_ids(tmp_path
             "admitted_at": "2026-08-09T00:00:00Z",
             "admitted_by_application": archive.APPLICATION_NAME,
             "admitted_by_version": "0.3.0",
-            "byte_acquisition": {"application": archive.APPLICATION_NAME, "version": "0.3.0"},
+            "byte_acquisition": {
+                "provenance": "fresh_download",
+                "application": archive.APPLICATION_NAME,
+                "version": "0.3.0",
+            },
             "expected_size_bytes": 5,
             "expected_md5": "5d41402abc4b2a76b9719d911017c592",
             "observed_size_bytes": 5,

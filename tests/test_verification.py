@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import json
 import subprocess
 
 import pytest
@@ -372,6 +373,59 @@ def test_status_is_invalid_for_malformed_attestation(tmp_path: Path) -> None:
     validations_dir = tmp_path / "provenance" / "validations"
     validations_dir.mkdir(parents=True)
     (validations_dir / "bad.json").write_text("[]\n", encoding="utf-8")
+
+    assert status_project(tmp_path)["state"] == "INVALID"
+
+
+def test_status_is_invalid_for_attestation_archive_id_mismatch(tmp_path: Path) -> None:
+    archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
+    archive.write_archive_metadata(tmp_path, archive_metadata)
+    write_manifest([make_record()], tmp_path / "manifest.tsv")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+    assert verify_project(tmp_path) == 0
+
+    attestation_path = next((tmp_path / "provenance" / "validations").iterdir())
+    payload = attestation_path.read_text(encoding="utf-8").replace(
+        str(archive_metadata["archive_id"]),
+        "00000000-0000-0000-0000-000000000000",
+        1,
+    )
+    attestation_path.write_text(payload, encoding="utf-8")
+
+    assert status_project(tmp_path)["state"] == "INVALID"
+
+
+def test_status_is_invalid_for_attestation_missing_required_field(tmp_path: Path) -> None:
+    archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
+    archive.write_archive_metadata(tmp_path, archive_metadata)
+    write_manifest([make_record()], tmp_path / "manifest.tsv")
+    sra_dir = tmp_path / "sra"
+    sra_dir.mkdir()
+    (sra_dir / "SRR1").write_bytes(b"hello")
+    assert verify_project(tmp_path) == 0
+
+    attestation_path = next((tmp_path / "provenance" / "validations").iterdir())
+    payload = attestation_path.read_text(encoding="utf-8")
+    attestation = json.loads(payload)
+    attestation.pop("control_fingerprint", None)
+    attestation_path.write_text(json.dumps(attestation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert status_project(tmp_path)["state"] == "INVALID"
+
+
+def test_status_is_invalid_for_acquisition_record_missing_integrity_field(tmp_path: Path) -> None:
+    archive_metadata = archive.create_archive_metadata("PRJNA000001", origin="native", application_version="0.3.0")
+    archive.write_archive_metadata(tmp_path, archive_metadata)
+    acquisitions = tmp_path / "provenance" / "acquisitions.jsonl"
+    acquisitions.parent.mkdir(parents=True, exist_ok=True)
+    acquisitions.write_text(
+        '{"schema_version": "1.0", "event_id": "11111111-1111-1111-1111-111111111111", "archive_id": "'
+        + str(archive_metadata["archive_id"])
+        + '", "accession": "SRR1", "relative_path": "sra/SRR1", "admission_method": "existing", "admitted_at": "2026-08-09T00:00:00Z", "admitted_by_application": "ncbi-bioproject-archiver", "admitted_by_version": "0.3.0", "byte_acquisition": {"provenance": "unknown"}, "expected_size_bytes": 5, "observed_size_bytes": 5, "observed_md5": "5d41402abc4b2a76b9719d911017c592", "observed_sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}\n',
+        encoding="utf-8",
+    )
 
     assert status_project(tmp_path)["state"] == "INVALID"
 
