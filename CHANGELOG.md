@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1
+
+- Hardened run accession handling with strict validation and filesystem containment checks before run-specific file operations.
+- Made SRA verification fail closed: downloads now require positive expected size and valid MD5 metadata at ingestion and verification time.
+- Strengthened partial download handling by promoting exact-size `.part` files only after MD5 verification.
+- Corrected FASTQ completion semantics by validating completion-marker manifests (exact file set, recorded sizes, safe names, gzip integrity).
+- Tightened metadata snapshot validation to enforce schema-major support, required files, safe relative paths, checksums, record counts, and cross-file identity consistency.
+- Made metadata refresh transactional using staging and atomic directory swaps; failed refreshes no longer mutate existing snapshots.
+- Made offline metadata normalization reproducible by preserving `retrieved_at` provenance from existing snapshots.
+- Added automatic Entrez POST for large `efetch` UID lists.
+- Switched XML parsing to `defusedxml` and added it as a runtime dependency.
+- Added CI and Dependabot configuration to continuously exercise tests and dependency updates.
+
 ## 0.2.0
 
 - Added reproducible BioProject metadata snapshots, normalization, provenance,
