@@ -6,7 +6,7 @@
 BioProject accession -> metadata snapshot -> run manifest -> verified SRA download -> optional FASTQ
 ```
 
-It preserves raw NCBI responses, writes stable normalized JSON/TSV products, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, size, and MD5 verification.
+It preserves raw NCBI responses, writes stable normalized JSON/TSV products, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, and strict size plus MD5 verification.
 
 `SRA Normalized` is NCBI's full normalized SRA object produced by the primary ETL workflow. The tool requires `semantic_name="SRA Normalized"` and `supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced quality representation is not lossless.
 
@@ -58,7 +58,7 @@ sra-bioproject snapshot PRJNA831841 --outdir /data/PRJNA831841
 
 `metadata` retrieves and normalizes metadata only. `snapshot` additionally writes `manifest.tsv`; neither command downloads sequence data. Add `--include-literature-search` to search Europe PMC for accession mentions, or `--sra-xml existing.xml` to reuse an existing SRA XML export. NCBI-curated links and database links remain distinct from text-discovered Europe PMC associations.
 
-Existing snapshots are never overwritten implicitly. Use `--refresh` to archive the previous metadata state under `metadata/archive/<timestamp>/`. Rebuild derived files without network access with:
+Existing snapshots are never overwritten implicitly. Use `--refresh` to rebuild in a staging directory and atomically swap only after a successful refresh; the previous metadata state is then archived under `metadata/archive/<timestamp>/`. Rebuild derived files without network access with:
 
 ```bash
 sra-bioproject metadata-normalize --metadata-dir /data/PRJNA831841/metadata \
@@ -83,7 +83,7 @@ sra-bioproject download export.xml --outdir /data/my-project --jobs 2
 sra-bioproject download manifest.tsv --outdir /data/my-project --jobs 2
 ```
 
-Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to override it. Interrupted commands are safe to rerun. Curl resumes `.part` files, verified completed files are skipped, and invalid completed files are quarantined as `.bad.<timestamp>`.
+Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to override it. Interrupted commands are safe to rerun. Curl resumes `.part` files, exact-size partials are promoted only after verification, verified completed files are skipped, and invalid files are quarantined as `.bad.<timestamp>`.
 
 For an overnight macOS run, create the destination before redirecting output:
 
@@ -130,7 +130,7 @@ sra-bioproject download manifest.tsv --outdir /data/my-project
 sra-bioproject download manifest.tsv --outdir /data/my-project --mode fastq
 ```
 
-The second command verifies and skips the completed SRA files, then converts them sequentially. It requires the same XML or manifest input and output directory used for the download, and the verified SRA files must still be present under `OUTDIR/sra/`. The command remains safely resumable: completed FASTQ outputs with valid completion markers are skipped.
+The second command verifies and skips the completed SRA files, then converts them sequentially. It requires the same XML or manifest input and output directory used for the download, and the verified SRA files must still be present under `OUTDIR/sra/`. The command remains safely resumable: completed FASTQ outputs are skipped only when completion markers match the exact expected file set and validated gzip outputs.
 
 Alternatively, add `--mode fastq` to the initial download command to begin conversion immediately after every required SRA object has downloaded and verified. In either workflow, the application runs `fasterq-dump --split-files`, compresses each FASTQ with `pigz` or `gzip`, tests gzip integrity, and writes a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an SRA object only after all compressed FASTQ files pass their checks.
 
@@ -154,7 +154,7 @@ OUTDIR/
     └── failed_accessions.txt   present only after persistent failures
 ```
 
-The dry run reports normalized SRA size, sequenced bases, and destination free space. A final filename is never considered complete by name alone: available size and MD5 metadata must verify before an atomic `.part` rename or skip.
+The dry run reports normalized SRA size, sequenced bases, and destination free space. A final filename is never considered complete by name alone: required size and MD5 metadata must verify before an atomic `.part` rename or skip.
 
 Exit statuses are `0` complete success, `1` general failure, `2` invalid input/configuration, `3` required retrieval incomplete, `4` optional metadata missing, `5` normalization/validation failure, and `130` keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
 

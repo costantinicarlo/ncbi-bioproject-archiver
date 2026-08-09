@@ -1,6 +1,6 @@
 # From a Paper to a Reusable Local BioProject Dataset
 
-*An end-to-end tutorial for `ncbi-sra-bioproject-downloader` 0.2.0*
+*An end-to-end tutorial for `ncbi-sra-bioproject-downloader` 0.2.1*
 
 A sequencing paper can be exciting for all the right reasons: an interesting organism, an elegant design, or a dataset that could answer a question the authors never asked. Then comes the less glamorous moment. Somewhere near the end of the article, often in a short data-availability paragraph, you find an accession such as `PRJNA831841`. You now have a route to the data—but not yet a dataset you can safely analyse.
 
@@ -19,7 +19,7 @@ BioProject accession
 
 This chapter begins with the smallest practical workflow: start with a BioProject accession from a publication, inspect what it represents, estimate the required storage, and download the lossless SRA data. The later sections explore the other routes and controls offered by the command-line application.
 
-The commands target release **0.2.0**. Examples use `PRJNA831841`, the worked example already present in this repository. It is a large project, so do not launch its real download merely as a test. Replace that accession with the one from your publication and always perform a dry run first.
+The commands target release **0.2.1**. Examples use `PRJNA831841`, the worked example already present in this repository. It is a large project, so do not launch its real download merely as a test. Replace that accession with the one from your publication and always perform a dry run first.
 
 ---
 
@@ -392,7 +392,7 @@ sra-bioproject download "$OUTDIR/manifest.tsv" \
   --jobs 2
 ```
 
-The application verifies and skips completed objects, resumes suitable `.part` files, removes an oversized partial, and quarantines invalid completed files as `.bad.<timestamp>`.
+The application verifies and skips completed objects, resumes suitable `.part` files, promotes exact-size partials only after verification, removes oversized partials, and quarantines invalid completed files as `.bad.<timestamp>`.
 
 Do not delete `.part` files merely because a transfer stopped.
 
@@ -501,6 +501,7 @@ metadata/archive/YYYYMMDDTHHMMSSZ/
 ```
 
 Sequence files remain untouched. Compare old and new run manifests before acquiring newly added records.
+The refresh operation is transactional: the replacement snapshot is built and validated in staging before the swap.
 
 ## Rebuild derived products offline
 
@@ -510,7 +511,7 @@ sra-bioproject metadata-normalize \
   --manifest "$OUTDIR/manifest.tsv"
 ```
 
-This is useful after software upgrades or accidental deletion of derived tables.
+This is useful after software upgrades or accidental deletion of derived tables. The command preserves retrieval provenance so derived outputs remain reproducible for a given raw snapshot.
 
 ## Convert a standalone XML export to TSV
 

@@ -48,7 +48,7 @@ curl --cacert /path/to/ca-bundle.pem -I https://sra-pub-run-odp.s3.amazonaws.com
 
 Avoid disabling certificate verification (for example `-k` or `--insecure`) for production downloads.
 
-`.part` files are resumable and should normally be left in place. Restart the same command safely. An oversized part is discarded automatically. A size or MD5 mismatch quarantines the object as `.bad.<timestamp>`; preserve it while checking storage and transport errors, then rerun.
+`.part` files are resumable and should normally be left in place. Restart the same command safely. An oversized part is discarded automatically. An exact-size part is promoted only after verification. A size or MD5 mismatch quarantines the object as `.bad.<timestamp>`; preserve it while checking storage and transport errors, then rerun.
 
 Check capacity before or during a run:
 
@@ -83,4 +83,4 @@ To rebuild normalized products without network access:
 sra-bioproject metadata-normalize --metadata-dir /data/PRJNA/metadata --manifest /data/PRJNA/manifest.tsv
 ```
 
-Use `--refresh` to archive an older snapshot before retrieval. Validate checksums and manifest consistency with `sra-bioproject validate /data/PRJNA`. A checksum mismatch indicates corruption or manual alteration; restore from `metadata/archive/` or retrieve a fresh snapshot. Current NCBI records may legitimately differ from an older archived snapshot.
+Use `--refresh` to perform a transactional snapshot replacement: new metadata is built in staging and only swapped in after success, then the previous state is archived. Validate checksums and manifest consistency with `sra-bioproject validate /data/PRJNA`. A checksum mismatch indicates corruption or manual alteration; restore from `metadata/archive/` or retrieve a fresh snapshot. Current NCBI records may legitimately differ from an older archived snapshot.
