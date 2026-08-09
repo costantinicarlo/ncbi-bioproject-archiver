@@ -1,12 +1,12 @@
 # From a Paper to a Reusable Local BioProject Dataset
 
-*An end-to-end tutorial for `ncbi-sra-bioproject-downloader` 0.2.1*
+*An end-to-end tutorial for `ncbi-bioproject-archiver` 0.3.0*
 
 A sequencing paper can be exciting for all the right reasons: an interesting organism, an elegant design, or a dataset that could answer a question the authors never asked. Then comes the less glamorous moment. Somewhere near the end of the article, often in a short data-availability paragraph, you find an accession such as `PRJNA831841`. You now have a route to the data—but not yet a dataset you can safely analyse.
 
 The gap between those two things is larger than it first appears. A BioProject can contain many samples and runs. Its current database record may include material that was not central to the paper. The files may be hundreds of gigabytes. A network interruption can leave an apparently plausible but incomplete file. Months later, it may be difficult to remember exactly which records were downloaded, what their checksums were, or which version of the metadata you inspected.
 
-`sra-bioproject` is designed to make that transition orderly. It treats a local BioProject directory as a reproducible acquisition unit:
+`ncbi-bioproject` is designed to make that transition orderly. It treats a local BioProject directory as a reproducible archive unit:
 
 ```text
 BioProject accession
@@ -19,7 +19,9 @@ BioProject accession
 
 This chapter begins with the smallest practical workflow: start with a BioProject accession from a publication, inspect what it represents, estimate the required storage, and download the lossless SRA data. The later sections explore the other routes and controls offered by the command-line application.
 
-The commands target release **0.2.1**. Examples use `PRJNA831841`, the worked example already present in this repository. It is a large project, so do not launch its real download merely as a test. Replace that accession with the one from your publication and always perform a dry run first.
+The commands target release **0.3.0**. Examples use `PRJNA831841`, the worked example already present in this repository. It is a large project, so do not launch its real download merely as a test. Replace that accession with the one from your publication and always perform a dry run first.
+
+The canonical CLI name in v0.3.0 is `ncbi-bioproject`. The legacy alias `sra-bioproject` still works with a warning. Where older examples or notes still mention `sra-bioproject`, substitute `ncbi-bioproject`.
 
 ---
 
@@ -62,24 +64,23 @@ The application requires Python 3.9 or newer. Sequence downloads use `curl`, whi
 A virtual environment keeps the application separate from the rest of your Python installation. To install the tagged 0.2.0 release from GitHub:
 
 ```bash
-python3 -m venv ~/.venvs/sra-bioproject
-source ~/.venvs/sra-bioproject/bin/activate
+python3 -m venv ~/.venvs/ncbi-bioproject
+source ~/.venvs/ncbi-bioproject/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install \
-  "git+https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader.git@v0.2.0"
+python -m pip install .
 ```
 
 Confirm that the command is available:
 
 ```bash
-sra-bioproject --help
+ncbi-bioproject --help
 ```
 
 For a repository-local installation:
 
 ```bash
-git clone --branch v0.2.0 --depth 1 \
+git clone --branch main --depth 1 \
   https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader.git
 
 cd ncbi-sra-bioproject-downloader
@@ -144,7 +145,7 @@ export NCBI_EMAIL="your.name@example.org"
 The default tool identifier is suitable, although it can be made explicit:
 
 ```bash
-export NCBI_TOOL="sra-bioproject"
+export NCBI_TOOL="ncbi-bioproject"
 ```
 
 An API key is optional:

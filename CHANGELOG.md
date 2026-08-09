@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Renamed the Python distribution to `ncbi-bioproject-archiver` and made `ncbi-bioproject` the canonical CLI while retaining `sra-bioproject` as a warned compatibility alias.
+- Added durable archive identity, append-only admission provenance, structured verification attestations, and lifecycle status reporting for managed BioProject archives.
+- Added archive-wide `verify` and `status` commands, including honest legacy bootstrap, SHA-256 baseline establishment, and conservative staleness detection.
+- Made metadata and snapshot creation initialize native archive identity transactionally without weakening refresh rollback guarantees.
+- Rejected `--delete-sra-after-fastq` under the v0.3 archival contract because authoritative SRA payloads must remain present.
+
 ## 0.2.1
 
 - Hardened run accession handling with strict validation and filesystem containment checks before run-specific file operations.

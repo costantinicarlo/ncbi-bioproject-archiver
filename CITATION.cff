@@ -1,18 +1,17 @@
 cff-version: 1.2.0
 message: "If you use this software in research, please cite it using the metadata below."
-title: "NCBI SRA BioProject Downloader"
+title: "NCBI BioProject Archiver"
 type: software
 authors:
   - family-names: "Costantini"
     given-names: "Carlo"
 repository-code: "https://github.com/costantinicarlo/ncbi-sra-bioproject-downloader"
 license: MIT
-version: 0.2.1
-date-released: "2026-08-09"
+version: 0.3.0
 keywords:
   - NCBI
   - SRA
   - BioProject
   - genomics
   - FASTQ
-  - scientific data acquisition
+  - scientific data archiving

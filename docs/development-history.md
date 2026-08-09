@@ -12,3 +12,4 @@ The Git history deliberately retains the incident sequence as working snapshots.
 Separate commits and tags preserve what changed, why observed behavior looked partial, and which fix addressed each failure. The reusable package follows in later commits; the exact final prototype remains under `legacy/` for comparison.
 
 1. Version 0.2.0 adds comprehensive BioProject metadata snapshots. The existing SRA parser remains canonical for manual and retrieved XML, while a reusable Entrez client preserves raw records and produces normalized project, sample, run, publication, relationship, and linked-resource products with checksum provenance.
+2. Version 0.3.0 transitions the project from a downloader-centric tool to a BioProject archiver with durable archive identity, append-only admission provenance, archive-wide verification attestations, lifecycle status, and compatibility-preserving product renaming.

@@ -1,12 +1,14 @@
-# NCBI SRA BioProject Downloader
+# NCBI BioProject Archiver
 
-`sra-bioproject` treats a BioProject directory as a reproducible acquisition unit:
+`ncbi-bioproject` treats a BioProject directory as a reproducible archive unit:
 
 ```text
-BioProject accession -> metadata snapshot -> run manifest -> verified SRA download -> optional FASTQ
+BioProject accession -> metadata snapshot -> run manifest -> managed archive identity -> verified SRA payloads -> optional FASTQ
 ```
 
 It preserves raw NCBI responses, writes stable normalized JSON/TSV products, selects each run's lossless `SRA Normalized` object, and downloads it with resume, retry, and strict size plus MD5 verification.
+
+The canonical product identity is `ncbi-bioproject-archiver`. The canonical CLI is `ncbi-bioproject`. The legacy alias `sra-bioproject` remains available for compatibility and emits a warning on stderr.
 
 `SRA Normalized` is NCBI's full normalized SRA object produced by the primary ETL workflow. The tool requires `semantic_name="SRA Normalized"` and `supertype="Primary ETL"`; it never substitutes `SRA Lite`, whose reduced quality representation is not lossless.
 
@@ -40,7 +42,7 @@ For `--mode fastq` to complete, the `fasterq-dump` binary and at least one compr
 Generate a stable TSV file through either interface:
 
 ```bash
-sra-bioproject manifest export.xml --output manifest.tsv
+ncbi-bioproject manifest export.xml --output manifest.tsv
 python scripts/sra_xml_to_manifest.py export.xml --output manifest.tsv
 ```
 
@@ -52,45 +54,57 @@ Set a contact email for substantial NCBI retrievals:
 
 ```bash
 export NCBI_EMAIL=researcher@example.org
-sra-bioproject metadata PRJNA831841 --outdir /data/PRJNA831841
-sra-bioproject snapshot PRJNA831841 --outdir /data/PRJNA831841
+ncbi-bioproject metadata PRJNA831841 --outdir /data/PRJNA831841
+ncbi-bioproject snapshot PRJNA831841 --outdir /data/PRJNA831841
 ```
 
 `metadata` retrieves and normalizes metadata only. `snapshot` additionally writes `manifest.tsv`; neither command downloads sequence data. Add `--include-literature-search` to search Europe PMC for accession mentions, or `--sra-xml existing.xml` to reuse an existing SRA XML export. NCBI-curated links and database links remain distinct from text-discovered Europe PMC associations.
 
+Successful native metadata and snapshot creation now establish immutable archive identity under `provenance/archive.json`. Managed metadata-only archives are valid but remain `UNVERIFIED` until a later archive-wide verification can attest the authoritative payloads.
+
 Existing snapshots are never overwritten implicitly. Use `--refresh` to rebuild in a staging directory and atomically swap only after a successful refresh; the previous metadata state is then archived under `metadata/archive/<timestamp>/`. Rebuild derived files without network access with:
 
 ```bash
-sra-bioproject metadata-normalize --metadata-dir /data/PRJNA831841/metadata \
+ncbi-bioproject metadata-normalize --metadata-dir /data/PRJNA831841/metadata \
   --manifest /data/PRJNA831841/manifest.tsv
-sra-bioproject validate /data/PRJNA831841
+ncbi-bioproject validate /data/PRJNA831841
 ```
 
 Raw files are server responses preserved without reformatting. Derived files are normalized products for scripting and inspection. Metadata describes records and provenance; it is not sequence data and does not recursively download linked resources.
+
+For archive lifecycle operations, use:
+
+```bash
+ncbi-bioproject status /data/PRJNA831841
+ncbi-bioproject verify /data/PRJNA831841
+```
+
+`status` is read-only and reports whether the latest passing attestation still applies to the current manifest, provenance, and observed payload sentinel. `verify` rereads the authoritative SRA payloads and writes a new attestation.
 
 ## Download
 
 Inspect storage requirements without network activity:
 
 ```bash
-sra-bioproject download export.xml --outdir /data/my-project --dry-run
+ncbi-bioproject download export.xml --outdir /data/my-project --dry-run --bioproject PRJNA000001
 ```
 
 Download from XML or a previously generated manifest:
 
 ```bash
-sra-bioproject download export.xml --outdir /data/my-project --jobs 2
-sra-bioproject download manifest.tsv --outdir /data/my-project --jobs 2
+ncbi-bioproject download export.xml --outdir /data/my-project --jobs 2 --bioproject PRJNA000001
+ncbi-bioproject download manifest.tsv --outdir /data/my-project --jobs 2 --bioproject PRJNA000001
 ```
 
-Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to override it. Interrupted commands are safe to rerun. Curl resumes `.part` files, exact-size partials are promoted only after verification, verified completed files are skipped, and invalid files are quarantined as `.bad.<timestamp>`.
+Input format is inferred only from `.xml` or `.tsv`; use `--input-format` to override it. `--bioproject` is required when archive identity cannot be inferred from existing managed provenance or a valid metadata snapshot. Interrupted commands are safe to rerun. Curl resumes `.part` files, exact-size partials are promoted only after verification, verified completed files are skipped, and invalid files are quarantined as `.bad.<timestamp>`.
 
 For an overnight macOS run, create the destination before redirecting output:
 
 ```bash
 mkdir -p /Volumes/Research/my-project/logs
-nohup caffeinate -i sra-bioproject download export.xml \
+nohup caffeinate -i ncbi-bioproject download export.xml \
   --outdir /Volumes/Research/my-project --jobs 2 \
+  --bioproject PRJNA000001 \
   > /Volumes/Research/my-project/logs/launcher.log 2>&1 &
 ```
 
@@ -98,7 +112,7 @@ On Linux:
 
 ```bash
 mkdir -p /data/my-project/logs
-nohup sra-bioproject download export.xml --outdir /data/my-project --jobs 2 \
+nohup ncbi-bioproject download export.xml --outdir /data/my-project --jobs 2 --bioproject PRJNA000001 \
   > /data/my-project/logs/launcher.log 2>&1 &
 ```
 
@@ -106,14 +120,14 @@ Monitor with:
 
 ```bash
 tail -f /data/my-project/logs/download.log
-pgrep -af sra-bioproject
+pgrep -af ncbi-bioproject
 find /data/my-project/sra -type f ! -name '*.part' | wc -l
 ```
 
 The PRJNA831841 worked example may use:
 
 ```bash
-sra-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
+ncbi-bioproject download examples/PRJNA831841/NCBI_PRJNA831841.xml \
   --outdir /Volumes/Bioinfo-1/PRJNA831841 --dry-run
 ```
 
@@ -126,13 +140,13 @@ Before using `--mode fastq`, confirm that `fasterq-dump` and either `pigz` or `g
 To download SRA objects now and convert them later, run:
 
 ```bash
-sra-bioproject download manifest.tsv --outdir /data/my-project
-sra-bioproject download manifest.tsv --outdir /data/my-project --mode fastq
+ncbi-bioproject download manifest.tsv --outdir /data/my-project --bioproject PRJNA000001
+ncbi-bioproject download manifest.tsv --outdir /data/my-project --mode fastq --bioproject PRJNA000001
 ```
 
 The second command verifies and skips the completed SRA files, then converts them sequentially. It requires the same XML or manifest input and output directory used for the download, and the verified SRA files must still be present under `OUTDIR/sra/`. The command remains safely resumable: completed FASTQ outputs are skipped only when completion markers match the exact expected file set and validated gzip outputs.
 
-Alternatively, add `--mode fastq` to the initial download command to begin conversion immediately after every required SRA object has downloaded and verified. In either workflow, the application runs `fasterq-dump --split-files`, compresses each FASTQ with `pigz` or `gzip`, tests gzip integrity, and writes a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` removes an SRA object only after all compressed FASTQ files pass their checks.
+Alternatively, add `--mode fastq` to the initial download command to begin conversion immediately after every required SRA object has downloaded and verified. In either workflow, the application runs `fasterq-dump --split-files`, compresses each FASTQ with `pigz` or `gzip`, tests gzip integrity, and writes a completion marker. Conversion is sequential to limit temporary storage and I/O pressure. `vdb-validate` runs by default; use `--skip-vdb-validate` only deliberately. `--delete-sra-after-fastq` is rejected in v0.3.0 because the authoritative archived payload must remain the verified SRA object.
 
 FASTQ conversion can require substantially more temporary and final disk space than the normalized SRA download. Plan for the SRA file, uncompressed staging FASTQ, compression output, and toolkit scratch space to coexist.
 
@@ -146,6 +160,10 @@ OUTDIR/
 │   ├── raw/             preserved NCBI and optional Europe PMC responses
 │   ├── derived/         project.json and stable TSV tables
 │   └── archive/         prior snapshots created by --refresh
+├── provenance/
+│   ├── archive.json     immutable archive identity
+│   ├── acquisitions.jsonl
+│   └── validations/     append-only verification attestations
 ├── sra/                 verified SRA objects and resumable .part files
 ├── fastq/               optional .fastq.gz files and completion markers
 ├── tmp/                 FASTQ staging and scratch data
@@ -156,7 +174,7 @@ OUTDIR/
 
 The dry run reports normalized SRA size, sequenced bases, and destination free space. A final filename is never considered complete by name alone: required size and MD5 metadata must verify before an atomic `.part` rename or skip.
 
-Exit statuses are `0` complete success, `1` general failure, `2` invalid input/configuration, `3` required retrieval incomplete, `4` optional metadata missing, `5` normalization/validation failure, and `130` keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
+Exit statuses are `0` complete success or current verified status, `1` general failure, `2` invalid input/configuration, `3` required retrieval incomplete, `4` optional metadata missing, `5` normalization or verification failure, `6` actionable non-current lifecycle state from `status`, and `130` keyboard interruption. See [docs/troubleshooting.md](docs/troubleshooting.md) for recovery commands.
 
 ## Limitations
 

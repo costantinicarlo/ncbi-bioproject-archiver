@@ -4,6 +4,8 @@
 
 XML parsing is separate from download execution so NCBI metadata can be tested, reviewed, and converted without network access. `xml_parser.py` selects one `SRA Normalized`/`Primary ETL` object per run. `manifest.py` serializes those records. `downloader.py` handles local files and curl. `fastq.py` owns optional conversion, and `cli.py` coordinates them.
 
+`archive.py` owns immutable archive identity, admission provenance, attestation storage, and control/payload fingerprints. `verification.py` owns archive-wide verification, lifecycle state calculation, and honest bootstrap of pre-v0.3 holdings.
+
 The manifest is a durable provenance artifact: it records exactly which run URL, size, checksum, BioSample, experiment, library, and platform metadata drove a download. Its stable UTF-8 TSV columns are:
 
 ```text
@@ -20,7 +22,9 @@ Size catches truncation cheaply; MD5 verifies content. Both are required and val
 
 One run's failure is collected rather than propagated through the executor. Other futures finish, and later passes contain only failed runs. Persistent failures produce `logs/failed_accessions.txt` and a non-zero exit status.
 
-FASTQ conversion is sequential because `fasterq-dump`, scratch I/O, and compression can multiply temporary storage and saturate a disk. Completion is represented by gzip-tested outputs plus a marker manifest that records exact filenames and sizes. SRA deletion is permitted only after that full state is reached.
+Managed archives now distinguish byte acquisition from admission into the archive. Fresh downloads may attribute all bytes to the current application, while resumed, promoted, existing, and legacy material retain unknown or mixed original acquisition provenance and still receive truthful admission events.
+
+FASTQ conversion is sequential because `fasterq-dump`, scratch I/O, and compression can multiply temporary storage and saturate a disk. Completion is represented by gzip-tested outputs plus a marker manifest that records exact filenames and sizes. v0.3.0 rejects `--delete-sra-after-fastq` because the authoritative archival payload remains the verified SRA object.
 
 Runtime data (`sra/`, `fastq/`, `tmp/`, logs, partials, and quarantined files) are excluded from Git because they are large, mutable, and reproducible from the committed XML/manifest provenance.
 
@@ -35,5 +39,7 @@ Raw responses are immutable evidence. Normalized products are reproducible inter
 NCBI project and database links retain curated/database confidence. Europe PMC accession search is opt-in and records `text_discovered` confidence plus query evidence. Publication deduplication uses PMID, PMCID, normalized DOI, then exact normalized title.
 
 Schema versions are independent constants in `metadata/schemas.py`. Readers should reject unsupported major versions; future compatible columns may increment minor versions. Incompatible changes require a migration path from preserved raw data. Refresh is transactional: retrieval and normalization complete in staging before an atomic swap and archival of the previous metadata state.
+
+Archive lifecycle state is distinct from metadata validation. `validate` remains the metadata-snapshot validator. `verify` performs archive-wide integrity attestation, and `status` reports whether the latest passing attestation still applies to the current control state and observed payload sentinel.
 
 Required BioProject and SRA failures stop the workflow. Optional PubMed, PMC, Assembly, and Europe PMC failures produce a partial snapshot and exit status 4. Every raw and derived artifact is written atomically and recorded with SHA-256 and size in `snapshot.json`.

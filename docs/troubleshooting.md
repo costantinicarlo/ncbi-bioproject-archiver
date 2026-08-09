@@ -16,8 +16,8 @@ If no files appear after launch, inspect both layers:
 ```bash
 cat /data/my-project/logs/launcher.log
 tail -100 /data/my-project/logs/download.log
-pgrep -af sra-bioproject
-ps aux | grep '[s]ra-bioproject'
+pgrep -af ncbi-bioproject
+ps aux | grep '[n]cbi-bioproject'
 ```
 
 `launcher.log` captures shell, command lookup, and redirection failures. `download.log` exists only after Python validates and creates the output tree. Shell redirection happens before Python starts, so a missing redirected directory can prevent the application from running at all.
@@ -31,7 +31,7 @@ Curl exit status 60 indicates TLS certificate-chain verification failed (for exa
 The downloader uses `--retry-all-errors` and retry passes, but unstable links may still benefit from lowering concurrency:
 
 ```bash
-sra-bioproject download manifest.tsv --outdir /data/my-project --jobs 1
+ncbi-bioproject download manifest.tsv --outdir /data/my-project --jobs 1
 ```
 
 For exit 60, verify the endpoint and trust path explicitly:
@@ -80,7 +80,13 @@ BioSample attributes are heterogeneous. Inspect `metadata/derived/sample_attribu
 To rebuild normalized products without network access:
 
 ```bash
-sra-bioproject metadata-normalize --metadata-dir /data/PRJNA/metadata --manifest /data/PRJNA/manifest.tsv
+ncbi-bioproject metadata-normalize --metadata-dir /data/PRJNA/metadata --manifest /data/PRJNA/manifest.tsv
 ```
 
-Use `--refresh` to perform a transactional snapshot replacement: new metadata is built in staging and only swapped in after success, then the previous state is archived. Validate checksums and manifest consistency with `sra-bioproject validate /data/PRJNA`. A checksum mismatch indicates corruption or manual alteration; restore from `metadata/archive/` or retrieve a fresh snapshot. Current NCBI records may legitimately differ from an older archived snapshot.
+Use `--refresh` to perform a transactional snapshot replacement: new metadata is built in staging and only swapped in after success, then the previous state is archived. Validate checksums and manifest consistency with `ncbi-bioproject validate /data/PRJNA`.
+
+Use `ncbi-bioproject status /data/PRJNA` to check whether the latest passing archive attestation still applies to the current manifest, provenance, and observed payload sentinel. `status` is read-only and may conservatively report `STALE` after timestamp-only changes.
+
+Use `ncbi-bioproject verify /data/PRJNA` to reread authoritative SRA payloads cryptographically. Legacy pre-v0.3 archives remain `LEGACY` until a complete verification succeeds. If any required SRA fails during a legacy bootstrap attempt, no managed provenance is published.
+
+`--delete-sra-after-fastq` is rejected in v0.3.0 because SRA remains the authoritative archived payload.
