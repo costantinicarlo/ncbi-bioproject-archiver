@@ -30,7 +30,7 @@ The first task is to identify the accession that describes the dataset at the ri
 Look in the paper's *Data availability*, *Data accessibility*, *Sequence data*, or supplementary information sections. Search the PDF for `PRJNA`, `SRP`, `SRR`, `SAMN`, `ENA`, or simply `accession`. The accession prefixes tell you what kind of object you have found:
 
 | Prefix | Usually identifies | Why it matters |
-|---|---|---|
+| --- | --- | --- |
 | `PRJNA...` | NCBI BioProject | The best starting point for a whole study |
 | `SRP...` | SRA study | A sequencing-study record linked to runs |
 | `SAMN...` | BioSample | One biological sample and its provenance |
@@ -443,7 +443,7 @@ Add a brief human-written note describing the source publication, why the projec
 
 ---
 
-# Exploring the rest of the CLI
+## Exploring the rest of the CLI
 
 The `snapshot -> validate -> dry-run -> download` route is the usual path. The alternatives below become useful as projects and workflows grow.
 
@@ -643,7 +643,7 @@ sra-bioproject download "$OUTDIR/manifest.tsv" \
 ## Exit statuses
 
 | Status | Meaning |
-|---:|---|
+| ---: | --- |
 | `0` | Complete success |
 | `1` | General failure or persistent sequence download failure |
 | `2` | Invalid input or configuration |
