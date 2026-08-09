@@ -17,6 +17,7 @@ from .client import MetadataClient
 from .entrez import retrieve
 from .normalize import atomic_write, normalize, sha256sum
 from .schemas import SNAPSHOT_SCHEMA_VERSION
+from .validation import validate_project
 
 
 def _now() -> str:
@@ -48,6 +49,14 @@ def _archive_previous_state(
     archive_root = outdir / "metadata" / "archive"
     archive_destination = archive_root / stamp
     archive_destination.mkdir(parents=True, exist_ok=True)
+
+    def copy_item(source: Path, destination: Path) -> None:
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
     for child in list(previous_metadata_dir.iterdir()):
         if child.name == "archive":
             archive_root.mkdir(parents=True, exist_ok=True)
@@ -55,13 +64,11 @@ def _archive_previous_state(
                 destination = archive_root / archived_entry.name
                 if destination.exists():
                     destination = archive_root / f"{stamp}-{archived_entry.name}"
-                shutil.move(str(archived_entry), destination)
-            child.rmdir()
+                copy_item(archived_entry, destination)
             continue
-        shutil.move(str(child), archive_destination / child.name)
+        copy_item(child, archive_destination / child.name)
     if previous_manifest is not None and previous_manifest.exists():
-        shutil.move(str(previous_manifest), archive_destination / "manifest.tsv")
-    previous_metadata_dir.rmdir()
+        copy_item(previous_manifest, archive_destination / "manifest.tsv")
 
 
 def _unique_stamp() -> str:
@@ -163,6 +170,10 @@ def create_snapshot(accession: str, outdir: Path, *, client: MetadataClient | No
             sra_xml=sra_xml,
             command=command,
         )
+        validation_errors = validate_project(staging_root)
+        if validation_errors:
+            details = "; ".join(validation_errors[:5])
+            raise ValueError(f"Staged snapshot failed validation: {details}")
 
         previous_metadata = outdir / f".metadata.previous.{stamp}"
         previous_manifest = outdir / f".manifest.previous.{stamp}"

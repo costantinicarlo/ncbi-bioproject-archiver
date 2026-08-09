@@ -231,7 +231,9 @@ def validate_project(project_dir: Path) -> list[str]:
             if not isinstance(project_payload, dict):
                 errors.append("project.json must be a JSON object")
                 project_payload = {}
-            if project_payload.get("accession", "").strip().upper() != bioproject:
+            project_accession = project_payload.get("accession", "")
+            project_accession_text = project_accession.strip().upper() if isinstance(project_accession, str) else ""
+            if project_accession_text != bioproject:
                 errors.append("project.json accession does not match snapshot bioproject")
             if project_payload.get("schema_version") != PROJECT_SCHEMA_VERSION:
                 errors.append("project.json schema_version does not match supported schema")
@@ -251,6 +253,13 @@ def validate_project(project_dir: Path) -> list[str]:
             errors.append("manifest and runs.tsv accessions differ")
         for accession in run_keys & set(manifest):
             record = manifest[accession]
-            if (runs[accession]["url"], runs[accession]["sra_size_bytes"], runs[accession]["md5"]) != (record.url, str(record.sra_size_bytes), record.md5):
+            run_data = runs[accession]
+            run_url = run_data.get("url")
+            run_size = run_data.get("sra_size_bytes")
+            run_md5 = run_data.get("md5")
+            if not (isinstance(run_url, str) and isinstance(run_size, str) and isinstance(run_md5, str)):
+                errors.append(f"runs.tsv missing required fields for {accession}")
+                continue
+            if (run_url, run_size, run_md5) != (record.url, str(record.sra_size_bytes), record.md5):
                 errors.append(f"manifest and runs.tsv differ for {accession}")
     return errors

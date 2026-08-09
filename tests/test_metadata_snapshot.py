@@ -114,6 +114,50 @@ def test_initial_creation_failure_leaves_no_partial_metadata(tmp_path: Path, mon
     assert not list(tmp_path.glob(".snapshot.staging.*"))
 
 
+def test_refresh_aborts_when_staged_validation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    baseline_snapshot = (tmp_path / "metadata" / "snapshot.json").read_bytes()
+    baseline_manifest = (tmp_path / "manifest.tsv").read_bytes()
+
+    def fail_validation(project_dir: Path) -> list[str]:
+        if project_dir.name.startswith(".snapshot.staging."):
+            return ["forced staged validation failure"]
+        return []
+
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.validate_project", fail_validation)
+    with pytest.raises(ValueError, match="Staged snapshot failed validation"):
+        create_snapshot("PRJNA000001", tmp_path, refresh=True, write_download_manifest=True)
+
+    assert (tmp_path / "metadata" / "snapshot.json").read_bytes() == baseline_snapshot
+    assert (tmp_path / "manifest.tsv").read_bytes() == baseline_manifest
+
+
+def test_archive_copy_failure_restores_previous_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    baseline_snapshot = (tmp_path / "metadata" / "snapshot.json").read_bytes()
+    baseline_raw = (tmp_path / "metadata" / "raw" / "bioproject.xml").read_bytes()
+    baseline_manifest = (tmp_path / "manifest.tsv").read_bytes()
+
+    original_copy2 = snapshot_module.shutil.copy2
+    calls = {"count": 0}
+
+    def flaky_copy2(source, destination, *, follow_symlinks=True):
+        calls["count"] += 1
+        if calls["count"] >= 2:
+            raise OSError("forced archive copy failure")
+        return original_copy2(source, destination, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(snapshot_module.shutil, "copy2", flaky_copy2)
+    with pytest.raises(OSError, match="forced archive copy failure"):
+        create_snapshot("PRJNA000001", tmp_path, refresh=True, write_download_manifest=True)
+
+    assert (tmp_path / "metadata" / "snapshot.json").read_bytes() == baseline_snapshot
+    assert (tmp_path / "metadata" / "raw" / "bioproject.xml").read_bytes() == baseline_raw
+    assert (tmp_path / "manifest.tsv").read_bytes() == baseline_manifest
+
+
 @pytest.mark.parametrize("relative_path", ["raw/bioproject.xml", "derived/runs.tsv"])
 def test_validation_detects_corruption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str) -> None:
     monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
@@ -150,6 +194,37 @@ def test_validation_reports_non_object_project_json(tmp_path: Path, monkeypatch:
 
     errors = validate_project(tmp_path)
     assert any("project.json must be a JSON object" in error for error in errors)
+
+
+@pytest.mark.parametrize("payload", ['{"accession": 123}\n', '{"accession": null}\n'])
+def test_validation_reports_non_string_project_accession(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: str) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    (tmp_path / "metadata" / "derived" / "project.json").write_text(payload, encoding="utf-8")
+
+    errors = validate_project(tmp_path)
+    assert any("project.json accession does not match" in error for error in errors)
+
+
+@pytest.mark.parametrize("column", ["md5", "url"])
+def test_validation_reports_missing_runs_fields_without_crashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, column: str) -> None:
+    monkeypatch.setattr("sra_bioproject.metadata.snapshot.retrieve", lambda *args, **kwargs: (fixture_records(), []))
+    create_snapshot("PRJNA000001", tmp_path, write_download_manifest=True)
+    runs_path = tmp_path / "metadata" / "derived" / "runs.tsv"
+    lines = runs_path.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split("\t")
+    index = header.index(column)
+    header.pop(index)
+    rewritten = ["\t".join(header)]
+    for line in lines[1:]:
+        fields = line.split("\t")
+        fields.pop(index)
+        rewritten.append("\t".join(fields))
+    runs_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+    errors = validate_project(tmp_path)
+    assert any("runs.tsv header" in error for error in errors)
+    assert any("runs.tsv missing required fields" in error for error in errors)
 
 
 def test_validation_reports_invalid_manifest_without_crashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
